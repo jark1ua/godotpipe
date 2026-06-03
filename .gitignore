@@ -1,0 +1,18 @@
+# --- Godot 4 ---
+# Engine cache & import artifacts. Regenerated automatically on first
+# `--import` / editor open, so they don't belong in version control.
+.godot/
+
+# Exported game builds / packed archives.
+/export/
+*.pck
+*.zip
+export_presets.cfg
+
+# --- Tooling installed OUTSIDE the repo (see scripts/) ---
+# The engine binary and the godot-mcp server live in /home/user/tools and are
+# (re)created by scripts/setup_*.sh — never commit those big artifacts.
+
+# --- OS / editor junk ---
+.DS_Store
+*~

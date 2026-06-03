@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#17223b"/>
+  <!-- A simple "pipe" glyph: two segments feeding a node, nodding to "godotpipe" -->
+  <circle cx="64" cy="64" r="30" fill="none" stroke="#4f9dff" stroke-width="8"/>
+  <rect x="6"  y="58" width="36" height="12" rx="6" fill="#4f9dff"/>
+  <rect x="86" y="58" width="36" height="12" rx="6" fill="#4f9dff"/>
+  <circle cx="64" cy="64" r="9" fill="#ffffff"/>
+</svg>

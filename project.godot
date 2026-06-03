@@ -1,0 +1,44 @@
+; ============================================================================
+; Godot project manifest  (think: the "CMakeLists.txt + app manifest" of Godot)
+; ----------------------------------------------------------------------------
+; This is a plain INI file that the engine reads at boot. There is no compile
+; step for the game itself: the engine is a precompiled binary, and a "game"
+; is this manifest + a tree of declarative *scene* files (.tscn) it loads.
+;
+; `config_version=5` is the on-disk schema version for Godot 4.x. Do not bump
+; it by hand; the editor manages it.
+; ============================================================================
+config_version=5
+
+[application]
+
+; Window title + name shown by the OS.
+config/name="GodotPipe"
+config/description="A minimal Godot 4 game: it launches and shows a title screen. Nothing else."
+
+; The scene the engine instances on startup. This is the entire "entry point".
+; Equivalent to `int main()` returning a window — except it's data, not code.
+run/main_scene="res://scenes/title_screen.tscn"
+
+; Marker features so the editor knows which engine version authored this.
+config/features=PackedStringArray("4.6", "Forward Plus")
+
+; App / window icon.
+config/icon="res://icon.svg"
+
+[display]
+
+; Logical render size. The window opens at this resolution.
+window/size/viewport_width=1280
+window/size/viewport_height=720
+; Scale the whole UI to fit the window while preserving aspect ratio, so the
+; title stays centered and crisp regardless of the actual window size.
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
+[rendering]
+
+; Desktop default: Vulkan / Forward+. On a machine with a GPU this "just works".
+; (For headless rendering without a GPU we override this on the command line
+;  with `--rendering-method gl_compatibility --rendering-driver opengl3`.)
+renderer/rendering_method="forward_plus"

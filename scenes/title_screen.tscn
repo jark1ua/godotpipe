@@ -1,0 +1,75 @@
+; ============================================================================
+; title_screen.tscn  — the entire game.
+; ----------------------------------------------------------------------------
+; A .tscn is Godot's text scene format. It is DECLARATIVE: a serialized tree
+; of nodes and their properties, not executable code. For a C++ dev the mental
+; model is a hand-written object graph / a UI markup file (closer to a .ui or
+; QML file than to source). The engine deserializes this into live objects.
+;
+; There is NO script attached anywhere in this scene, so the game has zero
+; behavior: it instances this tree, draws one frame, and idles. That is exactly
+; the spec — "launches and does nothing but show a title page".
+;
+; Node tree:
+;   TitleScreen (Control)          <- full-rect root
+;   ├── Background (ColorRect)     <- solid fill behind everything
+;   └── Center (CenterContainer)   <- centers its child in the viewport
+;       └── Lines (VBoxContainer)  <- stacks the two labels vertically
+;           ├── Title    (Label)
+;           └── Subtitle (Label)
+; ============================================================================
+[gd_scene load_steps=2 format=3 uid="uid://b8titlescreen01"]
+
+; A reusable sub-resource: the look of the big title text. Inlined here because
+; it is only used once. `id` is a local handle referenced below.
+[sub_resource type="LabelSettings" id="LabelSettings_title"]
+font_size = 96
+outline_size = 10
+outline_color = Color(0, 0, 0, 0.55)
+
+; --- Root: a Control that fills the whole viewport (anchors_preset 15 = full rect)
+[node name="TitleScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+; --- Background: solid dark-navy fill stretched to the full rect.
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.09, 0.11, 0.17, 1)
+
+; --- Center: keeps its child centered no matter the window size.
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+; --- Lines: vertical stack with a little spacing between the two labels.
+[node name="Lines" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+; --- Title: the big centered text.
+[node name="Title" type="Label" parent="Center/Lines"]
+layout_mode = 2
+text = "GodotPipe"
+label_settings = SubResource("LabelSettings_title")
+horizontal_alignment = 1
+
+; --- Subtitle: small caption, also centered. Slightly dimmed via modulate.
+[node name="Subtitle" type="Label" parent="Center/Lines"]
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+text = "A title screen. It does nothing — on purpose."
+horizontal_alignment = 1
