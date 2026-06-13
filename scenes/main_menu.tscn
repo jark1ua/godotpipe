@@ -1,0 +1,58 @@
+; ============================================================================
+; main_menu.tscn — the main menu (logic in scripts/main_menu.gd, GDScript).
+; Background + centered column: heading, Start button, Quit button.
+; ============================================================================
+[gd_scene load_steps=3 format=3 uid="uid://b8mainmenu0001"]
+
+[ext_resource type="Script" path="res://scripts/main_menu.gd" id="1_menu"]
+
+[sub_resource type="LabelSettings" id="LabelSettings_heading"]
+font_size = 64
+outline_size = 8
+outline_color = Color(0, 0, 0, 0.5)
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_menu")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.09, 0.11, 0.17, 1)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Buttons" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Heading" type="Label" parent="Center/Buttons"]
+layout_mode = 2
+text = "GodotPipe"
+label_settings = SubResource("LabelSettings_heading")
+horizontal_alignment = 1
+
+[node name="StartButton" type="Button" parent="Center/Buttons"]
+custom_minimum_size = Vector2(220, 48)
+layout_mode = 2
+text = "Start"
+
+[node name="QuitButton" type="Button" parent="Center/Buttons"]
+custom_minimum_size = Vector2(220, 48)
+layout_mode = 2
+text = "Quit"

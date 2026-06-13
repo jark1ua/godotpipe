@@ -1,0 +1,62 @@
+; ============================================================================
+; world.tscn — the 3D scene reached from the menu.
+; A cube on a ground plane, lit by a directional light, viewed through a camera
+; whose movement is driven by C# (scripts/CameraRig.cs). A GDScript HUD
+; (scripts/world_hud.gd) overlays controls + live camera state read from the C#.
+; ============================================================================
+[gd_scene load_steps=8 format=3 uid="uid://b8world000001"]
+
+[ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
+[ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
+
+[sub_resource type="Environment" id="Env_world"]
+background_mode = 1
+background_color = Color(0.05, 0.06, 0.09, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.55, 0.57, 0.62, 1)
+ambient_light_energy = 0.5
+
+[sub_resource type="BoxMesh" id="BoxMesh_cube"]
+size = Vector3(1, 1, 1)
+
+[sub_resource type="StandardMaterial3D" id="Mat_cube"]
+albedo_color = Color(0.31, 0.62, 1, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+size = Vector2(20, 20)
+
+[sub_resource type="StandardMaterial3D" id="Mat_ground"]
+albedo_color = Color(0.14, 0.15, 0.19, 1)
+
+[node name="World" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env_world")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.5, -0.866025, 0, 0.866025, 0.5, 0, 6, 0)
+light_energy = 1.2
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 5)
+current = true
+script = ExtResource("1_cam")
+
+[node name="Cube" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+mesh = SubResource("BoxMesh_cube")
+surface_material_override/0 = SubResource("Mat_cube")
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_ground")
+material_override = SubResource("Mat_ground")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Info" type="Label" parent="HUD"]
+offset_left = 16.0
+offset_top = 12.0
+offset_right = 540.0
+offset_bottom = 96.0
+text = "(controls)"
+script = ExtResource("2_hud")

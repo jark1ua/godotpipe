@@ -13,6 +13,11 @@ export_presets.cfg
 # The engine binary and the godot-mcp server live in /home/user/tools and are
 # (re)created by scripts/setup_*.sh — never commit those big artifacts.
 
+# --- .NET / C# build artifacts (restored + compiled by `dotnet build`) ---
+bin/
+obj/
+*.user
+
 # --- OS / editor junk ---
 .DS_Store
 *~

@@ -4,7 +4,7 @@
       "command": "node",
       "args": ["/home/user/tools/godot-mcp/build/index.js"],
       "env": {
-        "GODOT_PATH": "/home/user/tools/godot/godot",
+        "GODOT_PATH": "/home/user/tools/godot-mono/godot-mono",
         "DEBUG": "false"
       }
     }

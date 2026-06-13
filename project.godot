@@ -42,3 +42,10 @@ window/stretch/aspect="keep"
 ; (For headless rendering without a GPU we override this on the command line
 ;  with `--rendering-method gl_compatibility --rendering-driver opengl3`.)
 renderer/rendering_method="forward_plus"
+
+[dotnet]
+
+; Marks this as a Godot .NET (C#) project. The engine loads the compiled
+; assembly named below; the matching project file is GodotPipe.csproj.
+; This is why the project must be opened with the Godot .NET editor.
+project/assembly_name="GodotPipe"

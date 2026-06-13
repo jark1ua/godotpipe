@@ -1,0 +1,16 @@
+<Project Sdk="Godot.NET.Sdk/4.6.3">
+  <!-- ========================================================================
+       GodotPipe.csproj — the C# side of this Godot project.
+
+       `Godot.NET.Sdk` is an MSBuild SDK restored from NuGet; it knows how to
+       compile game scripts into an assembly the engine loads at runtime. There
+       is no Main() — the engine is the host; these classes attach to nodes.
+       The assembly name (GodotPipe) is referenced from project.godot's
+       [dotnet] section.
+       ===================================================================== -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

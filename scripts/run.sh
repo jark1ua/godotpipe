@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run.sh — launch the game.
+# run.sh — build the C# then launch the game.
 # ----------------------------------------------------------------------------
-#   ./scripts/run.sh             # desktop: opens a real window (needs a GPU/display)
-#   HEADLESS=1 ./scripts/run.sh  # server:  Xvfb + software OpenGL, no display needed
+#   ./scripts/run.sh             # desktop: opens a window (needs a GPU/display)
+#   HEADLESS=1 ./scripts/run.sh  # server:  Xvfb + software OpenGL, no display
+#
+# Uses the Godot .NET build (GODOT_PATH) because this project contains C#.
 # ============================================================================
 set -euo pipefail
 
-GODOT="${GODOT_PATH:-/home/user/tools/godot/godot}"
+GODOT="${GODOT_PATH:-/home/user/tools/godot-mono/godot-mono}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Compile the C# so the engine has a fresh assembly to load.
+if command -v dotnet >/dev/null 2>&1; then
+  echo ">> Building C# (GodotPipe.csproj)"
+  dotnet build "$ROOT/GodotPipe.csproj" -c Debug -v minimal
+fi
 
 if [ "${HEADLESS:-0}" = "1" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1

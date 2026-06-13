@@ -1,203 +1,183 @@
 # GodotPipe
 
-A deliberately minimal **Godot 4 game**: it launches, shows a title screen, and
-does nothing else. This repo also wires the project up to the **Godot engine**
-and the **[godot-mcp](https://github.com/Coding-Solo/godot-mcp)** server so the
-engine can be driven programmatically (by Claude/any MCP client).
+A small **Godot 4 (.NET)** project that deliberately mixes **GDScript** and **C#**.
+Flow: a title splash → a main menu → a 3D world with a cube you can fly around.
+The UI/flow is GDScript; the camera is C#; a GDScript HUD reads live state out of
+the C# node — so both languages share one node tree.
 
-![Title screen](docs/title_screen.png)
+| Title | Main menu | 3D world (C# camera + GDScript HUD) |
+|---|---|---|
+| ![Title](docs/title_screen.png) | ![Menu](docs/main_menu.png) | ![World](docs/world.png) |
 
-*(The image above was rendered headlessly by the engine itself — see
-[Proof it renders](#4-proof-it-actually-renders-no-gpu-needed).)*
-
----
-
-## TL;DR for a C++ programmer
-
-Godot is not a library you link against and call from `main()`. It is a
-**precompiled engine executable** that loads your game as **data**:
-
-| You might expect (native/C++)        | Godot's actual model                                   |
-| ------------------------------------ | ------------------------------------------------------ |
-| Compile your code into an executable | The **engine binary is already compiled**; you ship data |
-| `int main()` entry point             | `run/main_scene` in `project.godot` — a file path        |
-| Object graph built in code           | A **`.tscn` scene**: a serialized, declarative node tree |
-| Header/build config (CMake)          | `project.godot` — a plain INI manifest                   |
-| Logic in `.cpp`                      | Optional `.gd`/C# scripts attached to nodes (**none here**) |
-
-Because this game only needs to *show* something, it contains **zero gameplay
-code**. The title screen is pure declarative data; the engine deserializes it
-into live `Control` UI nodes and draws one frame. That is the whole program.
+*(All three were rendered headlessly by the engine — see [Verification](#verification).)*
 
 ---
 
-## What's in the repo
+## Scene flow
+
+```
+title_screen.tscn ──any key/click──▶ main_menu.tscn ──"Start"──▶ world.tscn
+   (GDScript)                          (GDScript)                 (C# + GDScript)
+                                          │
+                                       "Quit" ─▶ exit
+```
+Transitions are one call each: `get_tree().change_scene_to_file(...)` (GDScript) /
+`GetTree().ChangeSceneToFile(...)` (C#). In the world, **Esc** returns to the menu.
+
+## Which language does what — and why
+
+| File | Language | Role |
+|---|---|---|
+| `scripts/title_screen.gd` | GDScript | Splash → advance to menu on any input |
+| `scripts/main_menu.gd` | GDScript | Wire `Start`/`Quit` buttons |
+| `scripts/world_hud.gd` | GDScript | HUD that **reads the C# camera** each frame |
+| `scripts/CameraRig.cs` | **C#** | Free-fly camera: input, vector math, movement |
+
+The split is intentional: GDScript is quick for UI glue; C# gives the camera
+controller static typing and the OOP you're used to. They are not isolated —
+`world.tscn` contains both a C#-scripted `Camera3D` and a GDScript-scripted
+`Label` in the same tree.
+
+### The C# ⇄ GDScript interop, concretely
+`CameraRig.cs` exposes a field:
+```csharp
+[Export] public float MoveSpeed = 4.0f;
+```
+`world_hud.gd` (GDScript) reads it **by name**, plus the camera's live position:
+```gdscript
+var p: Vector3 = _camera.global_position      # built-in node property
+var speed: Variant = _camera.get("MoveSpeed") # a C# [Export] field, read from GDScript
+```
+That `[read from C#] MoveSpeed = 4.0` line visible in the world screenshot is
+GDScript displaying a value owned by the C# object. The run log also prints both
+sides, proving each executed:
+```
+[C#] CameraRig ready; aimed at cube from (0, 2, 5).
+[GD] HUD reading C#-driven camera; start pos = (0.0, 2.0, 5.0)
+```
+
+### Controls (in the world)
+`WASD` move · `Q`/`E` down/up · hold **right mouse** to look · `Shift` to boost · `Esc` to menu.
+
+---
+
+## Notes for a C++ programmer
+
+Godot is a precompiled **engine executable** that loads your game as **data**
+(`.tscn` scenes) plus optional scripts attached to nodes.
+
+| Native / C++ | Godot |
+|---|---|
+| Compile your code into the executable | Engine binary is prebuilt; you ship scenes + scripts |
+| `int main()` | `run/main_scene` in `project.godot` (a file path) |
+| Object graph built in code | `.tscn`: a serialized, declarative node tree |
+| `.cpp` translation units | `.gd` (interpreted) or **`.cs` (compiled to an assembly)** |
+| Header/build config (CMake) | `project.godot` (INI) + `GodotPipe.csproj` (MSBuild) |
+
+The C# here is **not** a native plugin (GDExtension). It's managed .NET: the
+`Godot.NET.Sdk` MSBuild SDK compiles `CameraRig.cs` into `GodotPipe.dll`, which
+the engine loads at runtime. `partial class CameraRig : Camera3D` works because a
+Roslyn source generator emits the glue that registers the class with the engine.
+
+---
+
+## Repo layout
 
 ```
 godotpipe/
-├── project.godot              # the manifest: name, entry scene, window, renderer
-├── icon.svg                   # app/window icon
-├── icon.svg.import            # engine-generated import metadata (committed on purpose)
+├── project.godot              # manifest; [dotnet] section marks this a C# project
+├── GodotPipe.csproj / .sln    # the C# project (compiled by `dotnet build`)
+├── icon.svg (+ .import)        # app icon
 ├── scenes/
-│   └── title_screen.tscn      # THE GAME: a declarative Control node tree, no script
-├── tools/                     # verification only — NOT part of the shipped game
-│   ├── capture.tscn           #   tiny scene that loads the title screen…
-│   └── capture.gd             #   …draws a few frames, screenshots, and quits
-├── docs/
-│   ├── .gdignore              # tells Godot "don't import this folder as assets"
-│   └── title_screen.png       # the captured proof-of-render
+│   ├── title_screen.tscn       # GDScript splash (no subtitle)
+│   ├── main_menu.tscn          # GDScript menu (Start / Quit)
+│   └── world.tscn              # 3D: cube + ground + light, C# camera, GDScript HUD
 ├── scripts/
-│   ├── setup_godot.sh         # download + install the engine (from GitHub Releases)
-│   ├── setup_mcp.sh           # clone + build the godot-mcp server from source
-│   ├── run.sh                 # launch the game (desktop, or HEADLESS=1 for servers)
-│   └── capture.sh             # regenerate docs/title_screen.png headlessly
-├── .mcp.json                  # MCP client config → godot-mcp → the engine
-└── .gitignore                 # ignores .godot/ cache, exports, etc.
+│   ├── title_screen.gd         # GDScript
+│   ├── main_menu.gd            # GDScript
+│   ├── world_hud.gd            # GDScript (reads the C# camera)
+│   └── CameraRig.cs            # C#  (the camera controller)
+├── tools/
+│   ├── capture.tscn / capture.gd   # headless screenshot harness (not the game)
+├── docs/                       # committed proof screenshots
+├── scripts/setup_godot.sh      # install the standard engine (GDScript-only)
+├── scripts/setup_dotnet.sh     # install .NET SDK + the Godot .NET/Mono engine
+├── scripts/setup_mcp.sh        # build the godot-mcp server
+├── scripts/run.sh              # build C# + launch (HEADLESS=1 for servers)
+├── scripts/capture.sh          # regenerate docs/*.png
+└── .mcp.json                  # godot-mcp → the Godot .NET engine
 ```
 
-> The engine binary (~139 MB) and the godot-mcp server live **outside** the repo
-> under `/home/user/tools/` and are (re)created by the `scripts/setup_*.sh`
-> scripts — they are intentionally not committed.
+> The engine binaries (~140 MB each) and the godot-mcp server live **outside** the
+> repo under `/home/user/tools/`, installed by the `scripts/setup_*.sh` scripts.
+> `.godot/` (incl. the compiled `mono/` output) and `bin/`, `obj/` are git-ignored.
 
 ---
 
-## How this was built, step by step
+## Build & run
 
-### 1. Install the engine
-Godot ships as one self-contained binary. The environment's network policy
-allows **GitHub** but blocks `godotengine.org`, so the binary is pulled from
-**GitHub Releases**:
+This project contains C#, so it needs the **Godot .NET editor/engine** (the
+standard build cannot open it) and the **.NET 8 SDK**.
 
 ```bash
-./scripts/setup_godot.sh           # → /home/user/tools/godot/godot
-/home/user/tools/godot/godot --headless --version
-# 4.6.3.stable.official.7d41c59c4
+# one-time setup
+./scripts/setup_dotnet.sh        # .NET 8 SDK + Godot .NET/Mono build
+./scripts/setup_mcp.sh           # (optional) the godot-mcp server
+
+# build the C# and run
+dotnet build GodotPipe.csproj    # → .godot/mono/temp/bin/Debug/GodotPipe.dll
+./scripts/run.sh                 # desktop window  (builds C# first)
+HEADLESS=1 ./scripts/run.sh      # headless: Xvfb + software OpenGL
 ```
 
-### 2. Author the game as data
-- `project.godot` declares the app name, the **entry scene**
-  (`run/main_scene="res://scenes/title_screen.tscn"`), the 1280×720 window, and
-  the renderer.
-- `scenes/title_screen.tscn` is a hand-written, fully-commented scene. Node tree:
-
-  ```
-  TitleScreen (Control)        ← fills the viewport
-  ├── Background (ColorRect)    ← solid dark fill
-  └── Center (CenterContainer)  ← centers its child
-      └── Lines (VBoxContainer) ← stacks two labels
-          ├── Title    (Label)  "GodotPipe"
-          └── Subtitle (Label)  "A title screen. It does nothing — on purpose."
-  ```
-
-  `res://` is the project root; the `.tscn` text format is the canonical,
-  diff-friendly representation the editor reads and writes.
-
-### 3. Let the engine validate it
-```bash
-/home/user/tools/godot/godot --headless --path . --import
-```
-This scans the project, imports `icon.svg` (producing `icon.svg.import`), and
-builds the `.godot/` cache. A clean exit means the scene parsed correctly.
-
-### 4. Proof it actually renders (no GPU needed)
-The container has no GPU, so we render with **Mesa llvmpipe** (software OpenGL)
-inside a virtual X server (**Xvfb**). `tools/capture.gd` instances the real
-title screen, waits for the renderer to draw, reads the framebuffer back, and
-saves a PNG:
-
-```bash
-./scripts/capture.sh        # → docs/title_screen.png (1280×720)
-```
-
-Engine log excerpt during capture:
-```
-OpenGL API 4.5 (Core Profile) Mesa 25.2.8 - Compatibility - Using Device: llvmpipe
-CAPTURE_RESULT err=0 size=(1280, 720) path=/home/user/godotpipe/docs/title_screen.png
-```
-
-### 5. Wire up godot-mcp (drive the engine via MCP)
-`godot-mcp` is a small Node server that exposes the engine to an MCP client as
-callable tools. Built from source and pointed at our engine:
-
-```bash
-./scripts/setup_mcp.sh      # → /home/user/tools/godot-mcp/build/index.js
-```
-
-It was smoke-tested over stdio (a real MCP `initialize` → `tools/list` →
-`tools/call` handshake). The server advertised **14 tools** and
-`get_godot_version` returned `4.6.3.stable.official.7d41c59c4` — i.e. the MCP
-server successfully shelled out to the engine binary:
-
-```
-launch_editor, run_project, get_debug_output, stop_project, get_godot_version,
-list_projects, get_project_info, create_scene, add_node, load_sprite,
-export_mesh_library, save_scene, get_uid, update_project_uids
-```
+Opening **in the Godot .NET editor** (which you have): just open `project.godot`.
+The editor restores NuGet packages, builds the C#, and you can press Play. The
+title appears first; any key → menu; **Start** → the cube world.
 
 ---
 
-## Running the game yourself
+## Verification
 
-**Desktop (with a GPU/display):**
+No GPU in the build box, so scenes are rendered with **Mesa llvmpipe** (software
+OpenGL) under **Xvfb**. `tools/capture.gd` loads a target scene, draws a few
+frames, reads the framebuffer, and saves a PNG:
+
 ```bash
-GODOT_PATH=/path/to/godot ./scripts/run.sh      # opens a window with the title screen
+./scripts/capture.sh             # regenerates docs/{title_screen,main_menu,world}.png
 ```
 
-**Headless server (no display):**
-```bash
-HEADLESS=1 ./scripts/run.sh                       # Xvfb + software OpenGL
-```
-
-Or run the engine directly:
-```bash
-/home/user/tools/godot/godot --path .             # play
-/home/user/tools/godot/godot -e --path .          # open in the editor
-```
+The world capture is the meaningful one: it loads the C#-scripted camera and the
+GDScript HUD together, so a clean `CAPTURE_RESULT err=0` plus the `[C#]`/`[GD]`
+log lines proves the cross-language scene runs.
 
 ---
 
-## Using the engine through MCP
+## Driving the engine via MCP (godot-mcp)
 
-`.mcp.json` (read automatically by Claude Code at the repo root) is wired to the
-**locally built** server, which is the exact one verified above:
+`.mcp.json` points the [godot-mcp](https://github.com/Coding-Solo/godot-mcp)
+server at the **.NET engine** so a Claude session can run/inspect this C# project:
 
 ```json
-{
-  "mcpServers": {
-    "godot": {
-      "command": "node",
-      "args": ["/home/user/tools/godot-mcp/build/index.js"],
-      "env": { "GODOT_PATH": "/home/user/tools/godot/godot", "DEBUG": "false" }
-    }
-  }
-}
+{ "mcpServers": { "godot": {
+  "command": "node",
+  "args": ["/home/user/tools/godot-mcp/build/index.js"],
+  "env": { "GODOT_PATH": "/home/user/tools/godot-mono/godot-mono", "DEBUG": "false" }
+}}}
 ```
-
-> **Important:** MCP servers are loaded when a Claude Code **session starts**, so
-> the `godot` tools become available in the *next* session opened on this repo —
-> not the one that created this file. (That's why the setup above was verified by
-> driving the server directly over stdio.)
-
-**Portable alternative** (any machine, no build step) — swap the server block for:
-
-```json
-"command": "npx",
-"args": ["-y", "@coding-solo/godot-mcp"],
-"env": { "GODOT_PATH": "/path/to/godot" }
-```
-
-On a machine where `godot` is already on `PATH`, `GODOT_PATH` can be omitted —
-the server auto-detects the engine. Adjust the absolute paths to match wherever
-`scripts/setup_*.sh` installed things.
+MCP servers load at session start, so the `godot` tools (`run_project`,
+`get_project_info`, `get_debug_output`, …) are available in a session opened
+*after* this file exists. Portable alternative: `npx -y @coding-solo/godot-mcp`.
 
 ---
 
 ## Environment notes
 
-- **Engine:** Godot `4.6.3.stable` (Linux x86_64), from GitHub Releases.
-- **Renderer (headless):** Mesa llvmpipe via `--rendering-driver opengl3
-  --rendering-method gl_compatibility` under Xvfb. The committed project default
-  is `forward_plus` (Vulkan) for real desktops.
-- **MCP server:** `godot-mcp` 0.1.1 (Node 22), built from source.
-- **Audio:** the container has no sound card; Godot logs ALSA/PulseAudio
-  warnings and falls back to a dummy audio driver. Harmless for this project.
+- **Engine:** Godot `4.6.3.stable` — both the standard and the **.NET/Mono** build
+  (Linux x86_64), from GitHub Releases.
+- **C# toolchain:** .NET SDK `8.0`; `Godot.NET.Sdk 4.6.3` + `GodotSharp` restored
+  from NuGet; assembly builds to `.godot/mono/temp/bin/Debug/GodotPipe.dll`.
+- **Headless renderer:** `--rendering-driver opengl3 --rendering-method
+  gl_compatibility` on Mesa llvmpipe under Xvfb. Project default is `forward_plus`
+  (Vulkan) for real desktops.
+- **Audio:** no sound card in the container; Godot logs ALSA/PulseAudio warnings
+  and falls back to a dummy driver. Harmless.
