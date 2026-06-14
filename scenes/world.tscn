@@ -4,10 +4,24 @@
 ; whose movement is driven by C# (scripts/CameraRig.cs). A GDScript HUD
 ; (scripts/world_hud.gd) overlays controls + live camera state read from the C#.
 ; ============================================================================
-[gd_scene load_steps=8 format=3 uid="uid://b8world000001"]
+[gd_scene load_steps=10 format=3 uid="uid://b8world000001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
+[ext_resource type="Shader" path="res://shaders/crt.gdshader" id="3_crt"]
+[ext_resource type="Script" path="res://scripts/crt_post.gd" id="4_crtpost"]
+
+[sub_resource type="ShaderMaterial" id="Mat_crt"]
+shader = ExtResource("3_crt")
+shader_parameter/curvature = 0.08
+shader_parameter/pixelation = 2.0
+shader_parameter/aberration = 1.2
+shader_parameter/color_levels = 24
+shader_parameter/scan_intensity = 0.22
+shader_parameter/scan_count = 360.0
+shader_parameter/noise_amount = 0.04
+shader_parameter/vignette_strength = 0.45
+shader_parameter/vignette_softness = 0.35
 
 [sub_resource type="Environment" id="Env_world"]
 background_mode = 1
@@ -60,3 +74,15 @@ offset_right = 540.0
 offset_bottom = 96.0
 text = "(controls)"
 script = ExtResource("2_hud")
+
+[node name="PostProcess" type="CanvasLayer" parent="."]
+layer = 100
+
+[node name="CRT" type="ColorRect" parent="PostProcess"]
+material = SubResource("Mat_crt")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("4_crtpost")
