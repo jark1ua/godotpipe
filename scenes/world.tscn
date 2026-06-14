@@ -4,12 +4,13 @@
 ; whose movement is driven by C# (scripts/CameraRig.cs). A GDScript HUD
 ; (scripts/world_hud.gd) overlays controls + live camera state read from the C#.
 ; ============================================================================
-[gd_scene load_steps=10 format=3 uid="uid://b8world000001"]
+[gd_scene load_steps=16 format=3 uid="uid://b8world000001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
 [ext_resource type="Shader" path="res://shaders/crt.gdshader" id="3_crt"]
 [ext_resource type="Script" path="res://scripts/crt_post.gd" id="4_crtpost"]
+[ext_resource type="Script" path="res://scripts/AgentBrain.cs" id="5_agent"]
 
 [sub_resource type="ShaderMaterial" id="Mat_crt"]
 shader = ExtResource("3_crt")
@@ -42,6 +43,26 @@ size = Vector2(20, 20)
 [sub_resource type="StandardMaterial3D" id="Mat_ground"]
 albedo_color = Color(0.14, 0.15, 0.19, 1)
 
+[sub_resource type="SphereMesh" id="SphereMesh_agent"]
+radius = 0.3
+height = 0.6
+
+[sub_resource type="StandardMaterial3D" id="Mat_agent"]
+albedo_color = Color(1, 0.45, 0.2, 1)
+emission_enabled = true
+emission = Color(0.6, 0.2, 0.05, 1)
+emission_energy_multiplier = 0.6
+
+[sub_resource type="SphereMesh" id="SphereMesh_pickup"]
+radius = 0.22
+height = 0.44
+
+[sub_resource type="StandardMaterial3D" id="Mat_pickup"]
+albedo_color = Color(0.4, 1, 0.55, 1)
+emission_enabled = true
+emission = Color(0.15, 0.6, 0.25, 1)
+emission_energy_multiplier = 0.7
+
 [node name="World" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -64,6 +85,32 @@ surface_material_override/0 = SubResource("Mat_cube")
 [node name="Ground" type="MeshInstance3D" parent="."]
 mesh = SubResource("PlaneMesh_ground")
 material_override = SubResource("Mat_ground")
+
+[node name="Agent" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0.3, 5)
+script = ExtResource("5_agent")
+
+[node name="Mesh" type="MeshInstance3D" parent="Agent"]
+mesh = SubResource("SphereMesh_agent")
+material_override = SubResource("Mat_agent")
+
+[node name="Pickup_boots" type="MeshInstance3D" parent="." groups=["pickup"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5, 0.3, -4)
+mesh = SubResource("SphereMesh_pickup")
+material_override = SubResource("Mat_pickup")
+metadata/item_id = "boots"
+
+[node name="Pickup_coil" type="MeshInstance3D" parent="." groups=["pickup"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.3, -5)
+mesh = SubResource("SphereMesh_pickup")
+material_override = SubResource("Mat_pickup")
+metadata/item_id = "coil"
+
+[node name="Pickup_core" type="MeshInstance3D" parent="." groups=["pickup"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.3, 6)
+mesh = SubResource("SphereMesh_pickup")
+material_override = SubResource("Mat_pickup")
+metadata/item_id = "core"
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

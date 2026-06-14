@@ -43,6 +43,14 @@ window/stretch/aspect="keep"
 ;  with `--rendering-method gl_compatibility --rendering-driver opengl3`.)
 renderer/rendering_method="forward_plus"
 
+[autoload]
+
+; Process-wide singleton instanced before any scene loads and kept alive across
+; scene changes. The "*" makes it an autoload (enabled). It owns the SQLite
+; Database; reach it as "/root/GameManager" in C# or the global "GameManager"
+; in GDScript.
+GameManager="*res://scripts/GameManager.cs"
+
 [dotnet]
 
 ; Marks this as a Godot .NET (C#) project. The engine loads the compiled
