@@ -58,6 +58,10 @@ public sealed class Database : IDisposable
                    key TEXT PRIMARY KEY,
                    value TEXT NOT NULL
                );");
+        Exec(@"CREATE TABLE IF NOT EXISTS inventory (
+                   item_id TEXT PRIMARY KEY,
+                   acquired_at TEXT NOT NULL
+               );");
     }
 
     // Populate the item catalog only if it's empty, so we don't clobber edits.
@@ -141,6 +145,29 @@ public sealed class Database : IDisposable
     {
         Exec("DELETE FROM collected;");
         Exec("DELETE FROM save_state;");
+        Exec("DELETE FROM inventory;");
+    }
+
+    // ---- player inventory --------------------------------------------------
+
+    public void AddToInventory(string itemId) =>
+        Exec("INSERT OR REPLACE INTO inventory (item_id, acquired_at) VALUES ($id, $t);",
+            ("$id", itemId), ("$t", DateTime.UtcNow.ToString("o")));
+
+    public int InventoryCount()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM inventory;";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    // Sum of MoveSpeedBonus across everything currently in the player's inventory.
+    public float InventoryBonus()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"SELECT COALESCE(SUM(i.move_speed_bonus), 0)
+                            FROM inventory inv JOIN items i ON i.id = inv.item_id;";
+        return (float)Convert.ToDouble(cmd.ExecuteScalar());
     }
 
     // ---- generic key/value save state --------------------------------------

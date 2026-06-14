@@ -31,6 +31,21 @@ float rand(vec2 co) {
 	return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
+// 4x4 ordered (Bayer) dither threshold for a given integer pixel, centered on 0.
+// Used so the low color-depth pass reads as retro stippling, not flat banding.
+float get_dither(vec2 pix) {
+	int x = int(pix.x) % 4;
+	int y = int(pix.y) % 4;
+	int i = x + y * 4;
+	float thresholds[16] = float[16](
+		0.0, 8.0, 2.0, 10.0,
+		12.0, 4.0, 14.0, 6.0,
+		3.0, 11.0, 1.0, 9.0,
+		15.0, 7.0, 13.0, 5.0
+	);
+	return thresholds[i] / 16.0 - 0.5;
+}
+
 void fragment() {
 	vec2 res = vec2(textureSize(screen_tex, 0));
 
@@ -47,7 +62,8 @@ void fragment() {
 
 	// --- pixelation: snap uv to a coarser grid for the low-fidelity look ---
 	vec2 grid = res / max(pixelation, 1.0);
-	uv = floor(uv * grid) / grid;
+	vec2 pix = floor(uv * grid);
+	uv = pix / grid;
 
 	// --- chromatic aberration: sample R/G/B at slightly offset positions ---
 	vec2 px = vec2(aberration) / res;
@@ -56,8 +72,10 @@ void fragment() {
 	col.g = texture(screen_tex, uv).g;
 	col.b = texture(screen_tex, uv - px).b;
 
-	// --- color quantization: collapse to a small number of levels (banding) ---
+	// --- color quantization with ordered dithering: collapse to a few levels,
+	//     dithered per low-res pixel so gradients look retro, not banded ---
 	float levels = float(color_levels);
+	col += vec3(get_dither(pix)) / levels;
 	col = floor(col * levels) / levels;
 
 	// --- diagonal line grain: project uv onto an angled axis so the dark bands

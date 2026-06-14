@@ -41,6 +41,23 @@ public partial class GameManager : Node
 
     public int CollectedCount() => Db.CollectedCount();
 
+    public int InventoryCount() => Db.InventoryCount();
+
+    // The player grabs an item: consume it from the world (so the AI won't seek
+    // it and it won't respawn), add it to the player's persisted inventory, and
+    // return its speed bonus. Returns 0 if something already took it.
+    public float CollectForPlayer(string itemId)
+    {
+        if (Db.IsCollected(itemId))
+            return 0.0f;
+        Item? item = Db.GetItem(itemId);
+        Db.MarkCollected(itemId);
+        Db.AddToInventory(itemId);
+        float bonus = item?.MoveSpeedBonus ?? 0.0f;
+        GD.Print($"[C#] Player collected '{item?.Name ?? itemId}' (+{bonus} speed).");
+        return bonus;
+    }
+
     public void ResetProgress()
     {
         Db.ClearCollected();

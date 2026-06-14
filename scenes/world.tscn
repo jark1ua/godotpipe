@@ -15,9 +15,9 @@
 [sub_resource type="ShaderMaterial" id="Mat_crt"]
 shader = ExtResource("3_crt")
 shader_parameter/curvature = 0.08
-shader_parameter/pixelation = 2.0
+shader_parameter/pixelation = 3.5
 shader_parameter/aberration = 1.2
-shader_parameter/color_levels = 24
+shader_parameter/color_levels = 16
 shader_parameter/scan_intensity = 0.22
 shader_parameter/scan_count = 900.0
 shader_parameter/scan_angle = 0.785
@@ -30,7 +30,15 @@ background_mode = 1
 background_color = Color(0.05, 0.06, 0.09, 1)
 ambient_light_source = 2
 ambient_light_color = Color(0.55, 0.57, 0.62, 1)
-ambient_light_energy = 0.5
+ambient_light_energy = 0.4
+tonemap_mode = 2
+glow_enabled = true
+glow_intensity = 0.9
+glow_bloom = 0.25
+glow_blend_mode = 1
+fog_enabled = true
+fog_light_color = Color(0.5, 0.55, 0.7, 1)
+fog_density = 0.015
 
 [sub_resource type="BoxMesh" id="BoxMesh_cube"]
 size = Vector3(1, 1, 1)
@@ -72,6 +80,14 @@ environment = SubResource("Env_world")
 [node name="Sun" type="DirectionalLight3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.5, -0.866025, 0, 0.866025, 0.5, 0, 6, 0)
 light_energy = 1.2
+shadow_enabled = true
+
+[node name="Lamp" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.5, 2.5, 2.5)
+light_color = Color(1, 0.66, 0.36, 1)
+light_energy = 4.0
+shadow_enabled = true
+omni_range = 9.0
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 5)

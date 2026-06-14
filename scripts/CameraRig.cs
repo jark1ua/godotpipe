@@ -22,6 +22,7 @@ public partial class CameraRig : Camera3D
     [Export] public float MoveSpeed = 4.0f;
     [Export] public float BoostMultiplier = 3.0f;
     [Export] public float MouseSensitivity = 0.0025f;
+    [Export] public float PickupRadius = 1.6f;
 
     private float _yaw;
     private float _pitch;
@@ -34,7 +35,12 @@ public partial class CameraRig : Camera3D
         LookAt(new Vector3(0.0f, 0.5f, 0.0f), Vector3.Up);
         _yaw = Rotation.Y;
         _pitch = Rotation.X;
-        GD.Print($"[C#] CameraRig ready; aimed at cube from {GlobalPosition}.");
+
+        // Restore speed earned from items collected in previous runs (persisted
+        // in SQLite), so the player keeps their upgrades across sessions.
+        float carried = GameManager.Instance.Db.InventoryBonus();
+        MoveSpeed += carried;
+        GD.Print($"[C#] CameraRig ready; aimed at cube from {GlobalPosition}. Carried speed bonus: {carried}.");
     }
 
     public override void _UnhandledInput(InputEvent @event)
@@ -62,6 +68,8 @@ public partial class CameraRig : Camera3D
 
     public override void _Process(double delta)
     {
+        TryCollectNearby();
+
         var wish = new Vector3(
             Axis(Key.A, Key.D),   // X: strafe left/right
             Axis(Key.Q, Key.E),   // Y: down/up
@@ -75,6 +83,23 @@ public partial class CameraRig : Camera3D
         // relative to where it is looking, then step by speed * frame time.
         Vector3 motion = (Transform.Basis * wish).Normalized() * speed * (float)delta;
         GlobalPosition += motion;
+    }
+
+    // Fly close to a pickup to grab it (racing the AI agent for it). Collection
+    // goes through GameManager so the world/inventory/persistence stay in sync.
+    private void TryCollectNearby()
+    {
+        foreach (var node in GetTree().GetNodesInGroup("pickup"))
+        {
+            if (node is not Node3D p || !p.IsInsideTree())
+                continue;
+            if (GlobalPosition.DistanceTo(p.GlobalPosition) > PickupRadius)
+                continue;
+
+            string id = p.HasMeta("item_id") ? p.GetMeta("item_id").AsString() : "";
+            MoveSpeed += GameManager.Instance.CollectForPlayer(id);
+            p.QueueFree();
+        }
     }
 
     // Returns +1 if the positive key is down, -1 if the negative key is down, else 0.
