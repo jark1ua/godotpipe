@@ -6,7 +6,7 @@
 ; (VillageEvents) — all viewed through the CRT post-process. Reuses the same
 ; CameraRig / world_hud / crt scripts as world.tscn.
 ; ============================================================================
-[gd_scene load_steps=45 format=3 uid="uid://bvillage00001"]
+[gd_scene load_steps=46 format=3 uid="uid://bvillage00001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
@@ -195,9 +195,12 @@ shader_parameter/albedo_tex = ExtResource("13_demotex")
 shader = ExtResource("14_outline")
 shader_parameter/outline_color = Color(0.04, 0.04, 0.06, 1)
 shader_parameter/thickness = 1.2
-shader_parameter/depth_edge = 0.003
+shader_parameter/depth_edge = 0.25
 shader_parameter/normal_edge = 0.7
 shader_parameter/strength = 1.0
+
+[sub_resource type="QuadMesh" id="Mesh_fsquad"]
+size = Vector2(2, 2)
 
 [sub_resource type="ShaderMaterial" id="Mat_retro"]
 shader = ExtResource("10_retro")
@@ -232,6 +235,12 @@ shadow_enabled = true
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 18)
 current = true
 script = ExtResource("1_cam")
+
+[node name="Outline" type="MeshInstance3D" parent="Camera3D"]
+extra_cull_margin = 16384.0
+mesh = SubResource("Mesh_fsquad")
+material_override = SubResource("Mat_outline")
+script = ExtResource("15_outlinepost")
 
 [node name="Ground" type="StaticBody3D" parent="."]
 
@@ -520,18 +529,6 @@ offset_right = 600.0
 offset_bottom = 110.0
 text = "(controls)"
 script = ExtResource("2_hud")
-
-[node name="PostProcessOutline" type="CanvasLayer" parent="."]
-layer = 98
-
-[node name="Outline" type="ColorRect" parent="PostProcessOutline"]
-material = SubResource("Mat_outline")
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-script = ExtResource("15_outlinepost")
 
 [node name="PostProcessRetro" type="CanvasLayer" parent="."]
 layer = 99

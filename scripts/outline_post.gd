@@ -1,13 +1,14 @@
-extends ColorRect
+extends MeshInstance3D
 # ============================================================================
-# outline_post.gd  (GDScript)  —  toggle for the edge-detection outline
-# post-process. Bound to F3, OFF by default. Stacks under the retro/CRT layers.
+# outline_post.gd  (GDScript)  —  toggle for the edge-detection outline.
+# Attached to the fullscreen-quad MeshInstance3D child of the camera (the
+# outline must be a spatial shader to read depth/normals). Toggle on F3, OFF
+# by default.
 # ============================================================================
 
 @export var enabled: bool = false
 
 func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	visible = enabled
 
 func _unhandled_input(event: InputEvent) -> void:
