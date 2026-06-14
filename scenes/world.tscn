@@ -4,17 +4,41 @@
 ; whose movement is driven by C# (scripts/CameraRig.cs). A GDScript HUD
 ; (scripts/world_hud.gd) overlays controls + live camera state read from the C#.
 ; ============================================================================
-[gd_scene load_steps=8 format=3 uid="uid://b8world000001"]
+[gd_scene load_steps=16 format=3 uid="uid://b8world000001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
+[ext_resource type="Shader" path="res://shaders/crt.gdshader" id="3_crt"]
+[ext_resource type="Script" path="res://scripts/crt_post.gd" id="4_crtpost"]
+[ext_resource type="Script" path="res://scripts/AgentBrain.cs" id="5_agent"]
+
+[sub_resource type="ShaderMaterial" id="Mat_crt"]
+shader = ExtResource("3_crt")
+shader_parameter/curvature = 0.08
+shader_parameter/pixelation = 3.5
+shader_parameter/aberration = 1.2
+shader_parameter/color_levels = 16
+shader_parameter/scan_intensity = 0.22
+shader_parameter/scan_count = 900.0
+shader_parameter/scan_angle = 0.785
+shader_parameter/noise_amount = 0.04
+shader_parameter/vignette_strength = 0.45
+shader_parameter/vignette_softness = 0.35
 
 [sub_resource type="Environment" id="Env_world"]
 background_mode = 1
 background_color = Color(0.05, 0.06, 0.09, 1)
 ambient_light_source = 2
 ambient_light_color = Color(0.55, 0.57, 0.62, 1)
-ambient_light_energy = 0.5
+ambient_light_energy = 0.4
+tonemap_mode = 2
+glow_enabled = true
+glow_intensity = 0.9
+glow_bloom = 0.25
+glow_blend_mode = 1
+fog_enabled = true
+fog_light_color = Color(0.5, 0.55, 0.7, 1)
+fog_density = 0.015
 
 [sub_resource type="BoxMesh" id="BoxMesh_cube"]
 size = Vector3(1, 1, 1)
@@ -28,6 +52,26 @@ size = Vector2(20, 20)
 [sub_resource type="StandardMaterial3D" id="Mat_ground"]
 albedo_color = Color(0.14, 0.15, 0.19, 1)
 
+[sub_resource type="SphereMesh" id="SphereMesh_agent"]
+radius = 0.3
+height = 0.6
+
+[sub_resource type="StandardMaterial3D" id="Mat_agent"]
+albedo_color = Color(1, 0.45, 0.2, 1)
+emission_enabled = true
+emission = Color(0.6, 0.2, 0.05, 1)
+emission_energy_multiplier = 0.6
+
+[sub_resource type="SphereMesh" id="SphereMesh_pickup"]
+radius = 0.22
+height = 0.44
+
+[sub_resource type="StandardMaterial3D" id="Mat_pickup"]
+albedo_color = Color(0.4, 1, 0.55, 1)
+emission_enabled = true
+emission = Color(0.15, 0.6, 0.25, 1)
+emission_energy_multiplier = 0.7
+
 [node name="World" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -36,6 +80,14 @@ environment = SubResource("Env_world")
 [node name="Sun" type="DirectionalLight3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.5, -0.866025, 0, 0.866025, 0.5, 0, 6, 0)
 light_energy = 1.2
+shadow_enabled = true
+
+[node name="Lamp" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.5, 2.5, 2.5)
+light_color = Color(1, 0.66, 0.36, 1)
+light_energy = 4.0
+shadow_enabled = true
+omni_range = 9.0
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 5)
@@ -51,6 +103,32 @@ surface_material_override/0 = SubResource("Mat_cube")
 mesh = SubResource("PlaneMesh_ground")
 material_override = SubResource("Mat_ground")
 
+[node name="Agent" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0.3, 5)
+script = ExtResource("5_agent")
+
+[node name="Mesh" type="MeshInstance3D" parent="Agent"]
+mesh = SubResource("SphereMesh_agent")
+material_override = SubResource("Mat_agent")
+
+[node name="Pickup_boots" type="MeshInstance3D" parent="." groups=["pickup"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5, 0.3, -4)
+mesh = SubResource("SphereMesh_pickup")
+material_override = SubResource("Mat_pickup")
+metadata/item_id = "boots"
+
+[node name="Pickup_coil" type="MeshInstance3D" parent="." groups=["pickup"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.3, -5)
+mesh = SubResource("SphereMesh_pickup")
+material_override = SubResource("Mat_pickup")
+metadata/item_id = "coil"
+
+[node name="Pickup_core" type="MeshInstance3D" parent="." groups=["pickup"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.3, 6)
+mesh = SubResource("SphereMesh_pickup")
+material_override = SubResource("Mat_pickup")
+metadata/item_id = "core"
+
 [node name="HUD" type="CanvasLayer" parent="."]
 
 [node name="Info" type="Label" parent="HUD"]
@@ -60,3 +138,15 @@ offset_right = 540.0
 offset_bottom = 96.0
 text = "(controls)"
 script = ExtResource("2_hud")
+
+[node name="PostProcess" type="CanvasLayer" parent="."]
+layer = 100
+
+[node name="CRT" type="ColorRect" parent="PostProcess"]
+material = SubResource("Mat_crt")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("4_crtpost")

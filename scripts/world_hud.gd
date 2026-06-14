@@ -14,10 +14,24 @@ func _ready() -> void:
 	# One-shot log line so the run output proves GDScript reached the C# node.
 	print("[GD] HUD reading C#-driven camera; start pos = ", _camera.global_position)
 
+func _unhandled_input(event: InputEvent) -> void:
+	# R resets persisted progress (via the C# GameManager autoload) and reloads
+	# the scene, so the pickups the AI already ate reappear.
+	if event is InputEventKey and event.is_pressed() and not event.is_echo() \
+			and event.keycode == KEY_R:
+		GameManager.call("ResetProgress")
+		get_tree().reload_current_scene()
+
 func _process(_delta: float) -> void:
 	var p: Vector3 = _camera.global_position
 	var speed: Variant = _camera.get("MoveSpeed")  # a C# [Export] field
-	text = "WASD move   Q/E down/up   hold RMB look   Shift boost   Esc menu\n"
+	# Read persistent record counts straight from the C# autoload / SQLite DB.
+	var collected: Variant = GameManager.call("CollectedCount")
+	var inventory: Variant = GameManager.call("InventoryCount")
+	text = "WASD move  Q/E up/down  RMB look  Shift boost  Esc menu  F1 CRT  F2 retro  F3 outline  R reset\n"
 	text += "camera: (%.1f, %.1f, %.1f)" % [p.x, p.y, p.z]
 	if speed != null:
 		text += "      [read from C#] MoveSpeed = %.1f" % speed
+	text += "\nfly into the green orbs to grab them before the AI does"
+	text += "\nlook right (+X) down the tree row: near=green 3D, mid=yellow blob, far=orange billboard (LOD)"
+	text += "\nworld collected: %d / 3   |   your inventory (SQLite): %d   — persists across runs" % [collected, inventory]

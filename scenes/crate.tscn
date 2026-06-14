@@ -1,0 +1,24 @@
+; ============================================================================
+; crate.tscn — a single physics crate (RigidBody3D). Spawned by VillageEvents
+; to demonstrate gravity: it falls and settles on the ground's collider.
+; ============================================================================
+[gd_scene load_steps=4 format=3 uid="uid://ccrate0001vg"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_crate"]
+size = Vector3(0.6, 0.6, 0.6)
+
+[sub_resource type="StandardMaterial3D" id="Mat_crate"]
+albedo_color = Color(0.55, 0.38, 0.2, 1)
+roughness = 0.9
+
+[sub_resource type="BoxShape3D" id="BoxShape_crate"]
+size = Vector3(0.6, 0.6, 0.6)
+
+[node name="Crate" type="RigidBody3D"]
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_crate")
+surface_material_override/0 = SubResource("Mat_crate")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_crate")

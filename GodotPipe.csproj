@@ -13,4 +13,11 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- SQLite for item definitions + persistent records. Microsoft.Data.Sqlite
+       pulls in SQLitePCLRaw.bundle_e_sqlite3, which ships the native sqlite
+       binary for Windows/Linux/macOS, so no system SQLite install is needed. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
 </Project>
