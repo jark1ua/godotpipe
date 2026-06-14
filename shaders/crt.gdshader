@@ -39,11 +39,11 @@ void fragment() {
 	float d2 = dot(cc, cc);
 	vec2 uv = SCREEN_UV + cc * d2 * curvature;
 
-	// Anything bent past the screen edge becomes the black bezel.
-	if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-		COLOR = vec4(0.0, 0.0, 0.0, 1.0);
-		return;
-	}
+	// Anything bent past the screen edge becomes the black bezel. Godot's shader
+	// language disallows `return` inside fragment(), so flag it and apply at the
+	// end rather than bailing out early.
+	bool offscreen = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+	uv = clamp(uv, vec2(0.0), vec2(1.0));
 
 	// --- pixelation: snap uv to a coarser grid for the low-fidelity look ---
 	vec2 grid = res / max(pixelation, 1.0);
@@ -76,5 +76,5 @@ void fragment() {
 	float vig = 1.0 - vignette_strength * smoothstep(vignette_softness, 0.9, length(cc) * 1.414);
 	col *= vig;
 
-	COLOR = vec4(col, 1.0);
+	COLOR = vec4(offscreen ? vec3(0.0) : col, 1.0);
 }
