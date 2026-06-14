@@ -6,7 +6,7 @@
 ; (VillageEvents) — all viewed through the CRT post-process. Reuses the same
 ; CameraRig / world_hud / crt scripts as world.tscn.
 ; ============================================================================
-[gd_scene load_steps=46 format=3 uid="uid://bvillage00001"]
+[gd_scene load_steps=54 format=3 uid="uid://bvillage00001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
@@ -23,6 +23,10 @@
 [ext_resource type="Texture2D" path="res://textures/demo_texture.png" id="13_demotex"]
 [ext_resource type="Shader" path="res://shaders/outline.gdshader" id="14_outline"]
 [ext_resource type="Script" path="res://scripts/outline_post.gd" id="15_outlinepost"]
+[ext_resource type="Texture2D" path="res://textures/cobble_albedo.png" id="16_cobalb"]
+[ext_resource type="Texture2D" path="res://textures/cobble_normal.png" id="17_cobnrm"]
+[ext_resource type="Texture2D" path="res://textures/cobble_ao.png" id="18_cobao"]
+[ext_resource type="Texture2D" path="res://textures/cobble_height.png" id="19_cobhgt"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.38, 0.52, 0.78, 1)
@@ -190,6 +194,48 @@ shader_parameter/snap_resolution = 90.0
 shader_parameter/snap_strength = 0.6
 shader_parameter/affine_strength = 1.0
 shader_parameter/albedo_tex = ExtResource("13_demotex")
+
+[sub_resource type="PlaneMesh" id="Mesh_groundpatch"]
+size = Vector2(26, 26)
+
+[sub_resource type="StandardMaterial3D" id="Mat_cobble_ground"]
+albedo_texture = ExtResource("16_cobalb")
+roughness = 0.9
+normal_enabled = true
+normal_scale = 1.0
+normal_texture = ExtResource("17_cobnrm")
+ao_enabled = true
+ao_texture = ExtResource("18_cobao")
+ao_texture_channel = 0
+heightmap_enabled = true
+heightmap_scale = 4.0
+heightmap_texture = ExtResource("19_cobhgt")
+uv1_scale = Vector3(8, 8, 1)
+
+[sub_resource type="StandardMaterial3D" id="Mat_cobble_demo"]
+albedo_texture = ExtResource("16_cobalb")
+roughness = 0.9
+normal_enabled = true
+normal_scale = 1.0
+normal_texture = ExtResource("17_cobnrm")
+ao_enabled = true
+ao_texture = ExtResource("18_cobao")
+ao_texture_channel = 0
+heightmap_enabled = true
+heightmap_scale = 4.0
+heightmap_texture = ExtResource("19_cobhgt")
+uv1_scale = Vector3(1, 1, 1)
+
+[sub_resource type="ShaderMaterial" id="Mat_cobble_psx"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(1, 1, 1, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 0.9
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
+shader_parameter/affine_strength = 1.0
+shader_parameter/albedo_tex = ExtResource("16_cobalb")
 
 [sub_resource type="ShaderMaterial" id="Mat_outline"]
 shader = ExtResource("14_outline")
@@ -507,6 +553,23 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -148)
 
 [node name="Events" type="Node" parent="."]
 script = ExtResource("7_events")
+
+[node name="CobbleDemo" type="Node3D" parent="."]
+
+[node name="GroundPatch" type="MeshInstance3D" parent="CobbleDemo"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.03, 2)
+mesh = SubResource("Mesh_groundpatch")
+material_override = SubResource("Mat_cobble_ground")
+
+[node name="PbrCube" type="MeshInstance3D" parent="CobbleDemo"]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 8, 1, 10)
+mesh = SubResource("Mesh_box")
+material_override = SubResource("Mat_cobble_demo")
+
+[node name="PsxPlane" type="MeshInstance3D" parent="CobbleDemo"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -11, 0.05, 10)
+mesh = SubResource("Mesh_demoplane")
+material_override = SubResource("Mat_cobble_psx")
 
 [node name="TextureDemo" type="Node3D" parent="."]
 
