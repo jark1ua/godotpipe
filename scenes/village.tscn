@@ -6,7 +6,7 @@
 ; (VillageEvents) — all viewed through the CRT post-process. Reuses the same
 ; CameraRig / world_hud / crt scripts as world.tscn.
 ; ============================================================================
-[gd_scene load_steps=38 format=3 uid="uid://bvillage00001"]
+[gd_scene load_steps=39 format=3 uid="uid://bvillage00001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
@@ -19,6 +19,7 @@
 [ext_resource type="PackedScene" path="res://scenes/lod_tree.tscn" id="9_lodtree"]
 [ext_resource type="Shader" path="res://shaders/retro.gdshader" id="10_retro"]
 [ext_resource type="Script" path="res://scripts/retro_post.gd" id="11_retropost"]
+[ext_resource type="Shader" path="res://shaders/psx.gdshader" id="12_psx"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.38, 0.52, 0.78, 1)
@@ -71,41 +72,71 @@ shader_parameter/wave_freq = 1.8
 [sub_resource type="BoxMesh" id="Mesh_box"]
 size = Vector3(1, 1, 1)
 
-[sub_resource type="StandardMaterial3D" id="Mat_wallA"]
-albedo_color = Color(0.85, 0.78, 0.62, 1)
-roughness = 0.9
+[sub_resource type="ShaderMaterial" id="Mat_wallA"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(0.85, 0.78, 0.62, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 0.9
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
-[sub_resource type="StandardMaterial3D" id="Mat_wallB"]
-albedo_color = Color(0.72, 0.56, 0.46, 1)
-roughness = 0.9
+[sub_resource type="ShaderMaterial" id="Mat_wallB"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(0.72, 0.56, 0.46, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 0.9
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
 [sub_resource type="PrismMesh" id="Mesh_roof"]
 size = Vector3(1, 1, 1)
 
-[sub_resource type="StandardMaterial3D" id="Mat_roof"]
-albedo_color = Color(0.45, 0.18, 0.15, 1)
-roughness = 0.8
+[sub_resource type="ShaderMaterial" id="Mat_roof"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(0.45, 0.18, 0.15, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 0.8
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
 [sub_resource type="CylinderMesh" id="Mesh_cyl"]
 top_radius = 0.5
 bottom_radius = 0.5
 height = 1.0
 
-[sub_resource type="StandardMaterial3D" id="Mat_wood"]
-albedo_color = Color(0.4, 0.26, 0.15, 1)
-roughness = 1.0
+[sub_resource type="ShaderMaterial" id="Mat_wood"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(0.4, 0.26, 0.15, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 1.0
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
 [sub_resource type="SphereMesh" id="Mesh_sphere"]
 radius = 0.5
 height = 1.0
 
-[sub_resource type="StandardMaterial3D" id="Mat_foliage"]
-albedo_color = Color(0.18, 0.4, 0.18, 1)
-roughness = 1.0
+[sub_resource type="ShaderMaterial" id="Mat_foliage"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(0.18, 0.4, 0.18, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 1.0
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
-[sub_resource type="StandardMaterial3D" id="Mat_rock"]
-albedo_color = Color(0.4, 0.4, 0.42, 1)
-roughness = 1.0
+[sub_resource type="ShaderMaterial" id="Mat_rock"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(0.4, 0.4, 0.42, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 1.0
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
 [sub_resource type="StandardMaterial3D" id="Mat_stone"]
 albedo_color = Color(0.5, 0.5, 0.52, 1)
@@ -128,11 +159,14 @@ emission_enabled = true
 emission = Color(1, 0.78, 0.45, 1)
 emission_energy_multiplier = 3.0
 
-[sub_resource type="StandardMaterial3D" id="Mat_agent"]
-albedo_color = Color(1, 0.45, 0.2, 1)
-emission_enabled = true
-emission = Color(0.6, 0.2, 0.05, 1)
-emission_energy_multiplier = 0.6
+[sub_resource type="ShaderMaterial" id="Mat_agent"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(1, 0.45, 0.2, 1)
+shader_parameter/emission_color = Color(0.6, 0.2, 0.05, 1)
+shader_parameter/emission_energy = 0.6
+shader_parameter/roughness_val = 0.8
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
 
 [sub_resource type="StandardMaterial3D" id="Mat_pickup"]
 albedo_color = Color(0.4, 1, 0.55, 1)
