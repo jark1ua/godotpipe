@@ -6,7 +6,7 @@
 ; (VillageEvents) — all viewed through the CRT post-process. Reuses the same
 ; CameraRig / world_hud / crt scripts as world.tscn.
 ; ============================================================================
-[gd_scene load_steps=35 format=3 uid="uid://bvillage00001"]
+[gd_scene load_steps=38 format=3 uid="uid://bvillage00001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
@@ -17,6 +17,8 @@
 [ext_resource type="Script" path="res://scripts/VillageEvents.cs" id="7_events"]
 [ext_resource type="PackedScene" path="res://scenes/crate.tscn" id="8_crate"]
 [ext_resource type="PackedScene" path="res://scenes/lod_tree.tscn" id="9_lodtree"]
+[ext_resource type="Shader" path="res://shaders/retro.gdshader" id="10_retro"]
+[ext_resource type="Script" path="res://scripts/retro_post.gd" id="11_retropost"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.38, 0.52, 0.78, 1)
@@ -137,6 +139,12 @@ albedo_color = Color(0.4, 1, 0.55, 1)
 emission_enabled = true
 emission = Color(0.15, 0.6, 0.25, 1)
 emission_energy_multiplier = 0.7
+
+[sub_resource type="ShaderMaterial" id="Mat_retro"]
+shader = ExtResource("10_retro")
+shader_parameter/pixel_size = 4.0
+shader_parameter/color_levels = 8
+shader_parameter/dither_strength = 1.0
 
 [sub_resource type="ShaderMaterial" id="Mat_crt"]
 shader = ExtResource("3_crt")
@@ -441,6 +449,18 @@ offset_right = 600.0
 offset_bottom = 110.0
 text = "(controls)"
 script = ExtResource("2_hud")
+
+[node name="PostProcessRetro" type="CanvasLayer" parent="."]
+layer = 99
+
+[node name="Retro" type="ColorRect" parent="PostProcessRetro"]
+material = SubResource("Mat_retro")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("11_retropost")
 
 [node name="PostProcess" type="CanvasLayer" parent="."]
 layer = 100

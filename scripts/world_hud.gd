@@ -28,7 +28,7 @@ func _process(_delta: float) -> void:
 	# Read persistent record counts straight from the C# autoload / SQLite DB.
 	var collected: Variant = GameManager.call("CollectedCount")
 	var inventory: Variant = GameManager.call("InventoryCount")
-	text = "WASD move   Q/E down/up   hold RMB look   Shift boost   Esc menu   F1 CRT   R reset\n"
+	text = "WASD move   Q/E down/up   hold RMB look   Shift boost   Esc menu   F1 CRT   F2 retro   R reset\n"
 	text += "camera: (%.1f, %.1f, %.1f)" % [p.x, p.y, p.z]
 	if speed != null:
 		text += "      [read from C#] MoveSpeed = %.1f" % speed
