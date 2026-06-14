@@ -20,8 +20,9 @@ uniform float curvature : hint_range(0.0, 0.5) = 0.08;        // barrel distorti
 uniform float pixelation : hint_range(1.0, 8.0) = 2.0;        // downsample factor (low-fi)
 uniform float aberration : hint_range(0.0, 4.0) = 1.2;        // chromatic split, in pixels
 uniform int   color_levels : hint_range(2, 64) = 24;          // color depth (banding)
-uniform float scan_intensity : hint_range(0.0, 1.0) = 0.22;   // scanline darkening
-uniform float scan_count : hint_range(64.0, 1080.0) = 360.0;  // scanline density
+uniform float scan_intensity : hint_range(0.0, 1.0) = 0.22;   // line darkening
+uniform float scan_count : hint_range(64.0, 2000.0) = 900.0;  // line density
+uniform float scan_angle : hint_range(-1.6, 1.6) = 0.785;     // line angle (rad); ~0.785 = 45 deg diagonal
 uniform float noise_amount : hint_range(0.0, 0.2) = 0.04;     // animated grain
 uniform float vignette_strength : hint_range(0.0, 1.0) = 0.45;
 uniform float vignette_softness : hint_range(0.0, 1.0) = 0.35;
@@ -59,8 +60,13 @@ void fragment() {
 	float levels = float(color_levels);
 	col = floor(col * levels) / levels;
 
-	// --- scanlines: dark horizontal bands modulated down the screen ---
-	float s = 0.5 + 0.5 * sin(SCREEN_UV.y * scan_count * 3.14159265);
+	// --- diagonal line grain: project uv onto an angled axis so the dark bands
+	//     run at scan_angle (default ~45 deg), matching the woven look of the
+	//     reference art. Aspect-correct the coordinate so lines stay straight. ---
+	vec2 dir = vec2(cos(scan_angle), sin(scan_angle));
+	float aspect = res.x / res.y;
+	float coord = dot(SCREEN_UV * vec2(aspect, 1.0), dir);
+	float s = 0.5 + 0.5 * sin(coord * scan_count * 3.14159265);
 	col *= 1.0 - scan_intensity * s;
 
 	// --- animated grain ---
