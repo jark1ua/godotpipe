@@ -1,0 +1,90 @@
+; ============================================================================
+; lod_tree.tscn — a tree with discrete LODs for near/far rendering.
+; ----------------------------------------------------------------------------
+; Godot does manual LOD via GeometryInstance3D "visibility range": each level
+; declares the camera-distance band over which it is shown, and fades across the
+; band edges (visibility_range_fade_mode = 1). Three levels:
+;
+;   Near (0–35m)   full tree: trunk + high-poly green foliage sphere
+;   Mid  (30–75m)  one low-poly (faceted) sphere, no trunk — cheap blob
+;   Far  (70m+)    a billboard QuadMesh (always faces the camera) — an impostor
+;
+; The levels are tinted differently (green / yellow / orange) ON PURPOSE so the
+; transitions are obvious in the demo; a shipping asset would keep them matched.
+; ============================================================================
+[gd_scene load_steps=9 format=3 uid="uid://blodtree00001"]
+
+[sub_resource type="CylinderMesh" id="Mesh_trunk"]
+top_radius = 0.18
+bottom_radius = 0.3
+height = 2.0
+radial_segments = 10
+
+[sub_resource type="StandardMaterial3D" id="Mat_wood"]
+albedo_color = Color(0.4, 0.26, 0.15, 1)
+roughness = 1.0
+
+[sub_resource type="SphereMesh" id="Mesh_folHi"]
+radius = 1.4
+height = 2.8
+radial_segments = 24
+rings = 12
+
+[sub_resource type="StandardMaterial3D" id="Mat_near"]
+albedo_color = Color(0.18, 0.45, 0.18, 1)
+roughness = 1.0
+
+[sub_resource type="SphereMesh" id="Mesh_folLo"]
+radius = 1.5
+height = 3.0
+radial_segments = 5
+rings = 3
+
+[sub_resource type="StandardMaterial3D" id="Mat_mid"]
+albedo_color = Color(0.6, 0.6, 0.15, 1)
+roughness = 1.0
+
+[sub_resource type="QuadMesh" id="Mesh_quad"]
+size = Vector2(3.2, 4.6)
+
+[sub_resource type="StandardMaterial3D" id="Mat_far"]
+albedo_color = Color(0.75, 0.38, 0.15, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="LODTree" type="Node3D"]
+
+[node name="Near_Trunk" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+visibility_range_end = 35.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("Mesh_trunk")
+material_override = SubResource("Mat_wood")
+
+[node name="Near_Foliage" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.8, 0)
+visibility_range_end = 35.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("Mesh_folHi")
+material_override = SubResource("Mat_near")
+
+[node name="Mid_Foliage" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.7, 0)
+visibility_range_begin = 30.0
+visibility_range_begin_margin = 8.0
+visibility_range_end = 75.0
+visibility_range_end_margin = 12.0
+visibility_range_fade_mode = 1
+mesh = SubResource("Mesh_folLo")
+material_override = SubResource("Mat_mid")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.6, 0)
+visibility_range_begin = 70.0
+visibility_range_begin_margin = 12.0
+visibility_range_fade_mode = 1
+mesh = SubResource("Mesh_quad")
+material_override = SubResource("Mat_far")

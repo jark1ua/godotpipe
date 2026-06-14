@@ -6,7 +6,7 @@
 ; (VillageEvents) — all viewed through the CRT post-process. Reuses the same
 ; CameraRig / world_hud / crt scripts as world.tscn.
 ; ============================================================================
-[gd_scene load_steps=34 format=3 uid="uid://bvillage00001"]
+[gd_scene load_steps=35 format=3 uid="uid://bvillage00001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
@@ -16,6 +16,7 @@
 [ext_resource type="Shader" path="res://shaders/water.gdshader" id="6_water"]
 [ext_resource type="Script" path="res://scripts/VillageEvents.cs" id="7_events"]
 [ext_resource type="PackedScene" path="res://scenes/crate.tscn" id="8_crate"]
+[ext_resource type="PackedScene" path="res://scenes/lod_tree.tscn" id="9_lodtree"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.38, 0.52, 0.78, 1)
@@ -39,10 +40,10 @@ glow_bloom = 0.25
 glow_blend_mode = 1
 fog_enabled = true
 fog_light_color = Color(0.55, 0.6, 0.7, 1)
-fog_density = 0.008
+fog_density = 0.003
 
 [sub_resource type="PlaneMesh" id="Mesh_ground"]
-size = Vector2(60, 60)
+size = Vector2(300, 300)
 
 [sub_resource type="StandardMaterial3D" id="Mat_grass"]
 albedo_color = Color(0.24, 0.42, 0.2, 1)
@@ -407,6 +408,26 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, 4, 3.2)
 
 [node name="Crate3" parent="." instance=ExtResource("8_crate")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.3, 5, 2.8)
+
+[node name="LODTrees" type="Node3D" parent="."]
+
+[node name="LODTree1" parent="LODTrees" instance=ExtResource("9_lodtree")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, 10)
+
+[node name="LODTree2" parent="LODTrees" instance=ExtResource("9_lodtree")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -6)
+
+[node name="LODTree3" parent="LODTrees" instance=ExtResource("9_lodtree")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -26)
+
+[node name="LODTree4" parent="LODTrees" instance=ExtResource("9_lodtree")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -56)
+
+[node name="LODTree5" parent="LODTrees" instance=ExtResource("9_lodtree")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -96)
+
+[node name="LODTree6" parent="LODTrees" instance=ExtResource("9_lodtree")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -148)
 
 [node name="Events" type="Node" parent="."]
 script = ExtResource("7_events")

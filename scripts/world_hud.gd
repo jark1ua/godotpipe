@@ -33,4 +33,5 @@ func _process(_delta: float) -> void:
 	if speed != null:
 		text += "      [read from C#] MoveSpeed = %.1f" % speed
 	text += "\nfly into the green orbs to grab them before the AI does"
+	text += "\nlook right (+X) down the tree row: near=green 3D, mid=yellow blob, far=orange billboard (LOD)"
 	text += "\nworld collected: %d / 3   |   your inventory (SQLite): %d   — persists across runs" % [collected, inventory]
