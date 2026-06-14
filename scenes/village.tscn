@@ -6,7 +6,7 @@
 ; (VillageEvents) — all viewed through the CRT post-process. Reuses the same
 ; CameraRig / world_hud / crt scripts as world.tscn.
 ; ============================================================================
-[gd_scene load_steps=39 format=3 uid="uid://bvillage00001"]
+[gd_scene load_steps=45 format=3 uid="uid://bvillage00001"]
 
 [ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world_hud.gd" id="2_hud"]
@@ -20,6 +20,9 @@
 [ext_resource type="Shader" path="res://shaders/retro.gdshader" id="10_retro"]
 [ext_resource type="Script" path="res://scripts/retro_post.gd" id="11_retropost"]
 [ext_resource type="Shader" path="res://shaders/psx.gdshader" id="12_psx"]
+[ext_resource type="Texture2D" path="res://textures/demo_texture.png" id="13_demotex"]
+[ext_resource type="Shader" path="res://shaders/outline.gdshader" id="14_outline"]
+[ext_resource type="Script" path="res://scripts/outline_post.gd" id="15_outlinepost"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.38, 0.52, 0.78, 1)
@@ -173,6 +176,28 @@ albedo_color = Color(0.4, 1, 0.55, 1)
 emission_enabled = true
 emission = Color(0.15, 0.6, 0.25, 1)
 emission_energy_multiplier = 0.7
+
+[sub_resource type="PlaneMesh" id="Mesh_demoplane"]
+size = Vector2(6, 6)
+
+[sub_resource type="ShaderMaterial" id="Mat_demo"]
+shader = ExtResource("12_psx")
+shader_parameter/albedo_color = Color(1, 1, 1, 1)
+shader_parameter/emission_color = Color(0, 0, 0, 1)
+shader_parameter/emission_energy = 0.0
+shader_parameter/roughness_val = 0.9
+shader_parameter/snap_resolution = 90.0
+shader_parameter/snap_strength = 0.6
+shader_parameter/affine_strength = 1.0
+shader_parameter/albedo_tex = ExtResource("13_demotex")
+
+[sub_resource type="ShaderMaterial" id="Mat_outline"]
+shader = ExtResource("14_outline")
+shader_parameter/outline_color = Color(0.04, 0.04, 0.06, 1)
+shader_parameter/thickness = 1.2
+shader_parameter/depth_edge = 0.003
+shader_parameter/normal_edge = 0.7
+shader_parameter/strength = 1.0
 
 [sub_resource type="ShaderMaterial" id="Mat_retro"]
 shader = ExtResource("10_retro")
@@ -474,6 +499,18 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22, 0, -148)
 [node name="Events" type="Node" parent="."]
 script = ExtResource("7_events")
 
+[node name="TextureDemo" type="Node3D" parent="."]
+
+[node name="FloorPatch" type="MeshInstance3D" parent="TextureDemo"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5, 0.02, 9)
+mesh = SubResource("Mesh_demoplane")
+material_override = SubResource("Mat_demo")
+
+[node name="DemoCube" type="MeshInstance3D" parent="TextureDemo"]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 4, 1, 9)
+mesh = SubResource("Mesh_box")
+material_override = SubResource("Mat_demo")
+
 [node name="HUD" type="CanvasLayer" parent="."]
 
 [node name="Info" type="Label" parent="HUD"]
@@ -483,6 +520,18 @@ offset_right = 600.0
 offset_bottom = 110.0
 text = "(controls)"
 script = ExtResource("2_hud")
+
+[node name="PostProcessOutline" type="CanvasLayer" parent="."]
+layer = 98
+
+[node name="Outline" type="ColorRect" parent="PostProcessOutline"]
+material = SubResource("Mat_outline")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("15_outlinepost")
 
 [node name="PostProcessRetro" type="CanvasLayer" parent="."]
 layer = 99
