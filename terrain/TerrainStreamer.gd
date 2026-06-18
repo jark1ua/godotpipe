@@ -73,7 +73,7 @@ func _process(delta: float) -> void:
 
 	# free chunks beyond keep_radius
 	for key in _loaded.keys():
-		var parts := key.split("_")
+		var parts := String(key).split("_")
 		var ci := int(parts[0])
 		var cj := int(parts[1])
 		if max(abs(ci - pi), abs(cj - pj)) > keep_radius:

@@ -7,7 +7,7 @@ shader_type spatial;
 // so all chunks sample one shared splatmap seamlessly. The same UV, scaled up,
 // drives the tiling of the detail textures (also seamless across chunk borders).
 
-uniform sampler2D splatmap : source_color = false, filter_linear_mipmap;
+uniform sampler2D splatmap : filter_linear_mipmap;
 uniform sampler2D tex_grass : source_color, filter_linear_mipmap_anisotropic;
 uniform sampler2D tex_rock  : source_color, filter_linear_mipmap_anisotropic;
 uniform sampler2D tex_snow  : source_color, filter_linear_mipmap_anisotropic;
