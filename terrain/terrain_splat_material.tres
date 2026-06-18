@@ -1,0 +1,24 @@
+[gd_resource type="ShaderMaterial" load_steps=7 format=3 uid="uid://cterrainsplatmat0"]
+
+; Terrain splat material — blends 4 tiling detail textures by terrain_splatmap.png.
+; The 4 tex_* slots point at PLACEHOLDER solid-colour PNGs under terrain/textures/.
+; Replace those 4 files with your own tiling PBR albedo textures (same paths) and
+; reimport — no edit to this resource needed. Splatmap channels: R=grass G=rock B=snow A=sand.
+
+[ext_resource type="Shader" path="res://shaders/terrain_splat.gdshader" id="1_shader"]
+[ext_resource type="Texture2D" path="res://terrain/terrain_splatmap.png" id="2_splat"]
+[ext_resource type="Texture2D" path="res://terrain/textures/terrain_grass.png" id="3_grass"]
+[ext_resource type="Texture2D" path="res://terrain/textures/terrain_rock.png" id="4_rock"]
+[ext_resource type="Texture2D" path="res://terrain/textures/terrain_snow.png" id="5_snow"]
+[ext_resource type="Texture2D" path="res://terrain/textures/terrain_sand.png" id="6_sand"]
+
+[resource]
+shader = ExtResource("1_shader")
+shader_parameter/world_size_m = 6000.0
+shader_parameter/tile_m = 12.0
+shader_parameter/layer_roughness = 1.0
+shader_parameter/splatmap = ExtResource("2_splat")
+shader_parameter/tex_grass = ExtResource("3_grass")
+shader_parameter/tex_rock = ExtResource("4_rock")
+shader_parameter/tex_snow = ExtResource("5_snow")
+shader_parameter/tex_sand = ExtResource("6_sand")

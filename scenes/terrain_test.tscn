@@ -1,0 +1,52 @@
+; ============================================================================
+; terrain_test.tscn — standalone scene to test the streamed terrain.
+; A free-fly camera (CameraRig.cs) flies over the chunked terrain; moving it
+; drives TerrainStreamer.gd to load/free chunks by distance. Sky + sun + light
+; fog so the far (unloaded) edge fades out instead of showing a hard void.
+;
+; Run directly from the editor (F6 on this scene). Controls: WASD/QE move,
+; hold Shift to boost, right-mouse to look. (Esc returns to the main menu via
+; CameraRig.) MoveSpeed is bumped well above its 4 m/s default so you can
+; actually cross 193 m chunks and watch streaming happen.
+; ============================================================================
+[gd_scene load_steps=6 format=3 uid="uid://bterraintest001"]
+
+[ext_resource type="Script" path="res://scripts/CameraRig.cs" id="1_cam"]
+[ext_resource type="PackedScene" path="res://scenes/Terrain.tscn" id="2_terrain"]
+
+[sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
+sky_horizon_color = Color(0.64, 0.66, 0.7, 1)
+ground_horizon_color = Color(0.64, 0.66, 0.7, 1)
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("Sky_mat")
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+tonemap_mode = 2
+fog_enabled = true
+fog_light_color = Color(0.64, 0.66, 0.7, 1)
+fog_density = 0.0009
+
+[node name="TerrainTest" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.5, -0.866025, 0, 0.866025, 0.5, 0, 0, 0)
+light_energy = 1.1
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 700, 600)
+current = true
+far = 6000.0
+script = ExtResource("1_cam")
+MoveSpeed = 150.0
+BoostMultiplier = 5.0
+
+[node name="Terrain" parent="." instance=ExtResource("2_terrain")]
+player_path = NodePath("../Camera3D")
