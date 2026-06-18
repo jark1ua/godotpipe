@@ -1,10 +1,8 @@
-[gd_scene load_steps=3 format=3 uid="uid://dterrainstream12"]
+[gd_scene load_steps=2 format=3 uid="uid://dterrainstream12"]
 
 [ext_resource type="Script" path="res://terrain/TerrainStreamer.gd" id="1_strm"]
-[ext_resource type="Material" path="res://terrain/terrain_splat_material.tres" id="2_mat"]
 
 [node name="Terrain" type="Node3D"]
 script = ExtResource("1_strm")
 manifest_path = "res://terrain/terrain_manifest.json"
 chunks_dir = "res://terrain/chunks"
-terrain_material = ExtResource("2_mat")

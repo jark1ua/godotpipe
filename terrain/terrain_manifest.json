@@ -12,14 +12,12 @@
   -373.08,
   1470.294
  ],
+ "control_map": "terrain_control_map.png",
+ "layer_count": 32,
+ "layer_manifest": "control_map_layers.json",
  "splatmap": "terrain_splatmap.png",
- "splat_channels": {
-  "r": "grass",
-  "g": "rock",
-  "b": "snow",
-  "a": "sand"
- },
- "uv": "per-vertex 0..1 across full world; sample terrain_splatmap with mesh UV",
+ "splatmap_note": "legacy 4-channel splatmap; superseded by the 32-layer control_map above",
+ "uv": "per-vertex 0..1 across full world; sample control_map / splatmap with mesh UV",
  "note": "place chunk i,j at Vector3(pos); j->+X, i->-Z; index=round(p/step)+center_index",
  "chunks": [
   {
