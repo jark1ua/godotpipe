@@ -37,6 +37,8 @@ var _loaded: Dictionary = {}   # "i_j" -> Node3D
 var _pending: Dictionary = {}  # "i_j" -> resource path
 var _player: Node3D = null
 var _accum: float = 0.0
+var _logged_first: bool = false
+var _mesh_count: int = 0
 
 func _ready() -> void:
 	var f := FileAccess.open(manifest_path, FileAccess.READ)
@@ -52,7 +54,15 @@ func _ready() -> void:
 			"path": chunks_dir.path_join(String(c["file"]).get_file()),
 		}
 	if not player_path.is_empty():
-		_player = get_node(player_path) as Node3D
+		_player = get_node_or_null(player_path) as Node3D
+	# Fall back to the active camera so streaming still works if Player Path is
+	# unset or fails to resolve (otherwise _process bails forever on a null player).
+	if _player == null:
+		_player = get_viewport().get_camera_3d()
+		if _player != null:
+			push_warning("TerrainStreamer: player_path unresolved; falling back to active Camera3D.")
+	print("TerrainStreamer ready: %d chunks in manifest, player=%s" % [
+		_meta.size(), _player.name if _player != null else "<none>"])
 
 func _process(delta: float) -> void:
 	_accum += delta
@@ -62,6 +72,10 @@ func _process(delta: float) -> void:
 	_accum = 0.0
 	var pj := int(round(_player.global_position.x / _step)) + _center
 	var pi := int(round(-_player.global_position.z / _step)) + _center
+	if not _logged_first:
+		_logged_first = true
+		print("TerrainStreamer: player at %s -> chunk (i=%d, j=%d); requesting load radius %d" % [
+			_player.global_position, pi, pj, load_radius])
 
 	# request loads within load_radius
 	for di in range(-load_radius, load_radius + 1):
@@ -98,12 +112,17 @@ func _spawn(key: String, packed: PackedScene) -> void:
 	inst.position = _meta[key]["pos"]
 	add_child(inst)
 	_loaded[key] = inst
+	_mesh_count = 0
 	_setup_meshes(inst)
+	if _loaded.size() == 1:
+		print("TerrainStreamer: first chunk '%s' spawned at %s with %d MeshInstance3D(s)" % [
+			key, inst.position, _mesh_count])
 
 func _setup_meshes(node: Node) -> void:
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			var mi := child as MeshInstance3D
+			_mesh_count += 1
 			if terrain_material != null:
 				mi.material_override = terrain_material
 			if add_collision and mi.mesh != null:
