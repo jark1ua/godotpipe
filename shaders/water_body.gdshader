@@ -32,6 +32,12 @@ uniform sampler2D mask_tex : filter_linear;
 uniform vec2 mask_min = vec2(0.0);
 uniform vec2 mask_max = vec2(1.0);
 
+// River flow. On river ribbons (UV.y runs down the channel) flow_speed > 0 scrolls a
+// soft highlight along the length to read as moving water. 0 on lakes/ocean (no-op).
+uniform float flow_speed = 0.0;
+uniform float flow_strength : hint_range(0.0, 1.0) = 0.35;
+uniform float flow_lines = 6.0;
+
 varying vec3 v_wpos;
 
 void vertex() {
@@ -57,6 +63,11 @@ void fragment() {
 	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), 3.0);
 	vec3 body = mix(deep_color, shallow_color, fres * 0.5 + 0.3);
 	ALBEDO = mix(body, fresnel_color, fres);
+	if (flow_speed > 0.0) {
+		// Soft bright bands scrolling down the channel (UV.y) to suggest current.
+		float fl = sin((UV.y * flow_lines - TIME * flow_speed) * 6.2831853);
+		ALBEDO = mix(ALBEDO, fresnel_color, clamp(fl, 0.0, 1.0) * 0.18 * flow_strength);
+	}
 	METALLIC = 0.2;
 	ROUGHNESS = 0.08;
 	ALPHA = alpha;

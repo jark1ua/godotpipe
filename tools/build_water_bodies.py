@@ -18,11 +18,20 @@ surface into a coarse global heightfield, then works out where water would pool:
      skipped here). The rest are inland LAKES -- each gets a flat surface level, a
      world bounding box and a small binary outline mask (PNG) for the runtime to
      clip its water plane to the real shoreline.
+  4. Rivers: D8 flow directions on the pit-free (depression-filled) surface, then
+     flow accumulation. Cells whose accumulated drainage exceeds a threshold form the
+     spill paths off the lakes/high ground down to the sea. These are traced into
+     polylines (with per-vertex width) the runtime renders as flowing-water ribbons.
+  5. (optional, --paint-control-map) Stamp a pebble layer into the terrain control map
+     EXR in a band around every water body (lake/sea shores + riverbeds). This makes
+     the shoreline read as pebbles AND -- because grass only spawns on grass-group
+     layers -- stops grass there automatically.
 
 Output
 ------
-  terrain/water_bodies.json      sea level + per-lake {level, bbox, mask}
+  terrain/water_bodies.json      sea level + per-lake {level, bbox, mask} + rivers
   terrain/water_masks/lake_*.png 8-bit outline mask per lake (255 = water)
+  terrain/terrain_control_map.exr (only with --paint-control-map) pebble shores painted in
 
 Re-run whenever the terrain chunks are re-exported (this is a derived asset, like
 tools/bake_chunk_normals.py -- keep it committed and idempotent).
@@ -30,8 +39,10 @@ tools/bake_chunk_normals.py -- keep it committed and idempotent).
 Usage
 -----
     python3 tools/build_water_bodies.py [--res 512] [--sea 0.0] [--min-area 8]
-        [--chunks terrain/chunks] [--manifest terrain/terrain_manifest.json]
-        [--out terrain/water_bodies.json] [--masks terrain/water_masks]
+        [--shore-dilate 2] [--river-threshold 220] [--paint-control-map]
+        [--pebble-band 2] [--pebble-layer 21]
+        [--chunks DIR] [--manifest FILE] [--out FILE] [--masks DIR]
+        [--control-map terrain/terrain_control_map.exr]
 """
 
 import array
@@ -136,9 +147,14 @@ def _fill_holes(height, res, sentinel):
 
 
 def priority_flood(height, res, sea_level):
-    """Return per-cell spill elevation (the level water rises to before escaping)."""
+    """Priority-flood the DEM. Returns (spill, order):
+      spill  per-cell filled elevation (level water rises to before escaping an outlet)
+      order  the sequence number each cell was settled in (small == nearer an outlet);
+             used to route flow across flats (lakes / filled pits) toward their pour
+             point, where the elevation alone gives no gradient."""
     INF = float("inf")
     spill = [INF] * (res * res)
+    order = [0] * (res * res)
     visited = bytearray(res * res)
     heap = []
     for y in range(res):
@@ -151,8 +167,11 @@ def priority_flood(height, res, sea_level):
                 spill[idx] = lvl
                 visited[idx] = 1
                 heapq.heappush(heap, (lvl, idx))
+    seq = 0
     while heap:
         lvl, idx = heapq.heappop(heap)
+        order[idx] = seq
+        seq += 1
         y = idx // res
         x = idx % res
         for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
@@ -166,7 +185,7 @@ def priority_flood(height, res, sea_level):
                     spill[nidx] = s
                     visited[nidx] = 1
                     heapq.heappush(heap, (s, nidx))
-    return spill
+    return spill, order
 
 
 def find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_area):
@@ -223,6 +242,139 @@ def dilate(cells, res, n):
     return s
 
 
+_N8 = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
+
+
+def flow_directions(spill, order, res):
+    """D8 downstream link per cell on the pit-free surface. Each cell points to the
+    neighbour with the lowest (spill, order); ties on spill drop toward the cell
+    settled earlier (nearer the outlet), so flats drain the right way. -1 = an outlet
+    (no lower neighbour)."""
+    N = res * res
+    down = [-1] * N
+    for idx in range(N):
+        y = idx // res
+        x = idx % res
+        best_key = (spill[idx], order[idx])
+        best = -1
+        for dy, dx in _N8:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < res and 0 <= nx < res:
+                nidx = ny * res + nx
+                key = (spill[nidx], order[nidx])
+                if key < best_key:
+                    best_key = key
+                    best = nidx
+        down[idx] = best
+    return down
+
+
+def flow_accumulation(down, spill, order, res):
+    """Upstream cell count draining through each cell (its catchment, in cells)."""
+    N = res * res
+    acc = [1.0] * N
+    # Process from highest (spill, order) to lowest so a cell is done before its outlet.
+    for idx in sorted(range(N), key=lambda i: (spill[i], order[i]), reverse=True):
+        d = down[idx]
+        if d >= 0:
+            acc[d] += acc[idx]
+    return acc
+
+
+def extract_rivers(acc, height, down, res, sea_level, threshold, lake_set, world, half,
+                   min_w, max_w, surface_lift, min_points=4):
+    """Trace river polylines down the flow network. River cells = drainage >= threshold,
+    above sea level, not inside a lake. Walk each headwater downstream to the sea / a
+    lake / an existing channel, emitting [x, y, z, width] points (y from the terrain)."""
+    N = res * res
+    river = set()
+    for i in range(N):
+        if acc[i] >= threshold and height[i] > sea_level and i not in lake_set:
+            river.add(i)
+    if not river:
+        return river, []
+
+    def wx(gx):
+        return gx / (res - 1) * world - half
+
+    def wz(gy):
+        return half - gy / (res - 1) * world
+
+    def width(i):
+        w = min_w * (acc[i] / threshold) ** 0.5
+        return round(max(min_w, min(max_w, w)), 2)
+
+    def point(i):
+        return [round(wx(i % res), 2), round(height[i] + surface_lift, 2),
+                round(wz(i // res), 2), width(i)]
+
+    indeg = {}
+    for i in river:
+        d = down[i]
+        if d in river:
+            indeg[d] = indeg.get(d, 0) + 1
+    heads = [i for i in river if indeg.get(i, 0) == 0]
+    heads.sort(key=lambda i: acc[i])   # small tributaries first; main stems absorb them
+
+    consumed = set()
+    polylines = []
+    for hw in heads:
+        if hw in consumed:
+            continue
+        pts = []
+        c = hw
+        while c is not None:
+            pts.append(point(c))
+            if c in consumed:        # joined an already-traced channel; stop at the junction
+                break
+            consumed.add(c)
+            d = down[c]
+            if d >= 0 and d in river:
+                c = d
+            else:
+                if d >= 0:           # final step into the sea / a lake / the map edge
+                    pts.append(point(d))
+                c = None
+        if len(pts) >= min_points:
+            polylines.append(pts)
+    return river, polylines
+
+
+def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer):
+    """Stamp `pebble_layer` into the control-map EXR for every world cell in
+    pebble_cells (a set of 512-grid indices). Each coarse cell covers a few control
+    texels; we set them to a solid pebble (base=layer, overlay=0, blend=0)."""
+    import exr_control_map
+    cm = exr_control_map.ControlMapEXR(control_path)
+    cw, ch = cm.W, cm.H
+    cell_m = world / (res - 1)
+
+    def tx(wx):
+        return max(0, min(cw - 1, int(round((wx + half) / world * (cw - 1)))))
+
+    def ty(wz):
+        return max(0, min(ch - 1, int(round((half - wz) / world * (ch - 1)))))
+
+    packed = pebble_layer & 0x7FFF   # base = pebble, overlay 0, blend 0 -> pure pebble
+    painted = 0
+    for idx in pebble_cells:
+        gx = idx % res
+        gy = idx // res
+        wx = gx / (res - 1) * world - half
+        wz = half - gy / (res - 1) * world
+        x0 = tx(wx - cell_m * 0.5)
+        x1 = tx(wx + cell_m * 0.5)
+        # z grows south; ty() is inverted, so the +z edge maps to the smaller row.
+        y0 = ty(wz + cell_m * 0.5)
+        y1 = ty(wz - cell_m * 0.5)
+        for ty_ in range(y0, y1 + 1):
+            for tx_ in range(x0, x1 + 1):
+                cm.set_packed(tx_, ty_, packed)
+                painted += 1
+    cm.save(control_path)
+    return painted
+
+
 def write_gray_png(path, w, h, rows):
     def chunk(typ, data):
         return (struct.pack(">I", len(data)) + typ + data
@@ -245,10 +397,20 @@ def main(argv):
     depth_eps = 0.5
     lake_above_sea = 1.0
     shore_dilate = 2
+    river_threshold = 220      # upstream cells (~0.03 km2) before a flow line is a river
+    river_min_w = 4.0
+    river_max_w = 26.0
+    river_lift = 0.3           # raise the ribbon this far above the terrain sample
+    paint_cm = False
+    pebble_band = 4            # lake pebble shore (cells); needs > shore_dilate to clear
+                              # the water plane's own overhang and stay visible on land
+    river_band = 1            # pebble bank on each side of a river channel (cells)
+    pebble_layer = 21          # control-map layer index to stamp (21 = pebble_field)
     chunks_dir = "terrain/chunks"
     manifest_path = "terrain/terrain_manifest.json"
     out_path = "terrain/water_bodies.json"
     masks_dir = "terrain/water_masks"
+    control_path = "terrain/terrain_control_map.exr"
     a = argv[1:]
     i = 0
     while i < len(a):
@@ -257,10 +419,16 @@ def main(argv):
         elif t == "--sea": i += 1; sea_level = float(a[i])
         elif t == "--min-area": i += 1; min_area = int(a[i])
         elif t == "--shore-dilate": i += 1; shore_dilate = int(a[i])
+        elif t == "--river-threshold": i += 1; river_threshold = int(a[i])
+        elif t == "--paint-control-map": paint_cm = True
+        elif t == "--pebble-band": i += 1; pebble_band = int(a[i])
+        elif t == "--river-band": i += 1; river_band = int(a[i])
+        elif t == "--pebble-layer": i += 1; pebble_layer = int(a[i])
         elif t == "--chunks": i += 1; chunks_dir = a[i]
         elif t == "--manifest": i += 1; manifest_path = a[i]
         elif t == "--out": i += 1; out_path = a[i]
         elif t == "--masks": i += 1; masks_dir = a[i]
+        elif t == "--control-map": i += 1; control_path = a[i]
         i += 1
 
     manifest = json.load(open(manifest_path))
@@ -273,14 +441,24 @@ def main(argv):
     hmin = min(height)
     hmax = max(v for v in height if v < 1e8)
     print("Heightfield range: %.1f .. %.1f m. Flooding (sea level %.1f)..." % (hmin, hmax, sea_level))
-    spill = priority_flood(height, res, sea_level)
+    spill, order = priority_flood(height, res, sea_level)
 
-    sea_cells = sum(1 for i in range(res * res)
-                    if spill[i] - height[i] > depth_eps and spill[i] <= sea_level + lake_above_sea)
+    sea_set = set(i for i in range(res * res)
+                  if spill[i] - height[i] > depth_eps and spill[i] <= sea_level + lake_above_sea)
     lakes = find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_area)
     lakes.sort(key=len, reverse=True)
+    lake_set = set()
+    for cells in lakes:
+        lake_set.update(cells)
     print("Sea/ocean covers ~%d cells (%.1f km2). Found %d inland lake(s) >= %d cells." % (
-        sea_cells, sea_cells * cell_m * cell_m / 1e6, len(lakes), min_area))
+        len(sea_set), len(sea_set) * cell_m * cell_m / 1e6, len(lakes), min_area))
+
+    print("Routing flow (D8) and tracing rivers (threshold %d cells)..." % river_threshold)
+    down = flow_directions(spill, order, res)
+    acc = flow_accumulation(down, spill, order, res)
+    river_set, rivers = extract_rivers(acc, height, down, res, sea_level, river_threshold,
+                                       lake_set, world, half, river_min_w, river_max_w, river_lift)
+    print("Rivers: %d cell(s) of channel traced into %d polyline(s)." % (len(river_set), len(rivers)))
 
     if not os.path.isdir(masks_dir):
         os.makedirs(masks_dir)
@@ -319,8 +497,10 @@ def main(argv):
             "mask": "water_masks/" + mask_name, "mask_w": mw, "mask_h": mh,
         })
 
+    river_bodies = [{"id": ri, "points": pts} for ri, pts in enumerate(rivers)]
+
     doc = {
-        "version": "1.0",
+        "version": "1.1",
         "world_size_m": world,
         "grid_res": res,
         "cell_size_m": round(cell_m, 4),
@@ -331,12 +511,28 @@ def main(argv):
                        "%d cell(s) past the waterline so the plane tucks under the shore."
                        % (half, world, shore_dilate)),
         "note": ("Sea/ocean is drawn at runtime as one plane at y=sea_level (land occludes it); "
-                 "only inland lakes are listed here. Re-run tools/build_water_bodies.py after "
+                 "only inland lakes are listed here. Rivers are polylines of [x,y,z,width] the "
+                 "runtime renders as ribbons. Re-run tools/build_water_bodies.py after "
                  "re-exporting the terrain chunks."),
         "lakes": bodies,
+        "rivers": river_bodies,
     }
     json.dump(doc, open(out_path, "w"), indent=2)
-    print("Wrote %s (%d lakes) and %d mask(s) in %s" % (out_path, len(bodies), len(bodies), masks_dir))
+    print("Wrote %s (%d lakes, %d rivers) and %d mask(s) in %s" % (
+        out_path, len(bodies), len(river_bodies), len(bodies), masks_dir))
+
+    if paint_cm:
+        # Pebble = the visible shore of LAKES and RIVERS only (the ocean coast already
+        # reads as sand). Lakes get a wider band (their water plane overhangs the shore
+        # by shore_dilate cells, so pebble must reach past that); rivers get a thin bank.
+        # Drop lake interiors and sea cells so we only repaint visible land + riverbeds.
+        pebble_cells = (dilate(lake_set, res, pebble_band) | dilate(river_set, res, river_band))
+        pebble_cells = pebble_cells - lake_set - sea_set
+        print("Painting pebble layer %d into %s over %d shore/bed cell(s)..." % (
+            pebble_layer, control_path, len(pebble_cells)))
+        n = paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer)
+        print("Painted %d control-map texel(s). (EXR is the source the streamer loads; the "
+              ".png twin is left untouched.)" % n)
     return 0
 
 

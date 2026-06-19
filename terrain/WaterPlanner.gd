@@ -1,7 +1,8 @@
 @tool
 extends Node3D
-## Places water on the terrain: one sea plane at sea level (follows the player) plus
-## a clipped plane for every inland lake found by tools/build_water_bodies.py.
+## Places water on the terrain: one sea plane at sea level (follows the player), a
+## clipped plane for every inland lake, and a flowing ribbon for every river spill path
+## found by tools/build_water_bodies.py.
 ##
 ## How it fits the project
 ## -----------------------
@@ -52,6 +53,16 @@ extends Node3D
 ## Overrides the JSON sea level if not NAN. Leave as-is to use the file's value.
 @export var sea_level_override: float = NAN
 
+@export_group("Rivers")
+## Render the flow-path rivers (polylines from build_water_bodies.py) as ribbons.
+@export var enable_rivers: bool = true
+## Distance (m) past which a river ribbon fades out (0 = never).
+@export var river_view_distance: float = 1400.0
+## Scroll speed of the flow highlight along each river (0 = still water).
+@export var river_flow_speed: float = 0.35
+## Metres of river length per flow-highlight repeat (smaller = denser bands).
+@export var river_flow_tile: float = 10.0
+
 @export_group("Lakes")
 @export var enable_lakes: bool = true
 ## Target metres between lake-plane vertices (for the wave displacement). Each lake's
@@ -82,8 +93,8 @@ func _ready() -> void:
 		if _player != null:
 			push_warning("WaterPlanner: player_path unresolved; falling back to active Camera3D.")
 	_build_all()
-	print("WaterPlanner ready: sea_level=%.1f, %d lake plane(s)." % [
-		_sea_level, get_child_count() - (1 if _sea != null else 0)])
+	print("WaterPlanner ready: sea_level=%.1f, %d water node(s)." % [
+		_sea_level, get_child_count()])
 
 func _process(_delta: float) -> void:
 	if _sea == null or _player == null:
@@ -107,6 +118,9 @@ func _build_all() -> void:
 	if enable_lakes and doc != null:
 		for lake in doc.get("lakes", []):
 			_build_lake(lake)
+	if enable_rivers and doc != null:
+		for river in doc.get("rivers", []):
+			_build_river(river)
 
 func _load_bodies() -> Dictionary:
 	var f := FileAccess.open(water_bodies_path, FileAccess.READ)
@@ -179,6 +193,74 @@ func _build_lake(lake: Dictionary) -> void:
 	if mat != null:
 		mi.material_override = mat
 	add_child(mi)
+
+# Build one river as a flat ribbon following its baked centreline (points carry world
+# x,y,z + width). One ArrayMesh per river, built once at startup — bounded work, not the
+# per-chunk streaming churn the terrain notes warn against.
+func _build_river(river: Dictionary) -> void:
+	var pts: Array = river.get("points", [])
+	if pts.size() < 2:
+		return
+	var n := pts.size()
+	var p := PackedVector3Array()
+	var hw := PackedFloat32Array()
+	p.resize(n)
+	hw.resize(n)
+	for i in range(n):
+		var e: Array = pts[i]
+		p[i] = Vector3(float(e[0]), float(e[1]), float(e[2]))
+		hw[i] = float(e[3]) * 0.5
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var left := PackedVector3Array()
+	var right := PackedVector3Array()
+	var vdist := PackedFloat32Array()
+	left.resize(n); right.resize(n); vdist.resize(n)
+	var run := 0.0
+	for i in range(n):
+		var fwd: Vector3
+		if i == 0:
+			fwd = p[1] - p[0]
+		elif i == n - 1:
+			fwd = p[n - 1] - p[n - 2]
+		else:
+			fwd = p[i + 1] - p[i - 1]
+		fwd.y = 0.0
+		if fwd.length() < 1e-4:
+			fwd = Vector3(0, 0, 1)
+		fwd = fwd.normalized()
+		var perp := Vector3(-fwd.z, 0.0, fwd.x)   # horizontal, across the channel
+		left[i] = p[i] + perp * hw[i]
+		right[i] = p[i] - perp * hw[i]
+		if i > 0:
+			run += p[i].distance_to(p[i - 1])
+		vdist[i] = run / maxf(river_flow_tile, 0.01)
+	for i in range(n - 1):
+		_ribbon_quad(st, left[i], right[i], right[i + 1], left[i + 1], vdist[i], vdist[i + 1])
+	st.generate_normals()
+	var mi := MeshInstance3D.new()
+	mi.name = "River_%s" % str(river.get("id", 0))
+	mi.mesh = st.commit()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if river_view_distance > 0.0:
+		mi.visibility_range_end = river_view_distance
+		mi.visibility_range_end_margin = river_view_distance * 0.15
+		mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	var mat := _material_for(false)
+	if mat is ShaderMaterial:
+		(mat as ShaderMaterial).set_shader_parameter("flow_speed", river_flow_speed)
+	if mat != null:
+		mi.material_override = mat
+	add_child(mi)
+
+func _ribbon_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		v0: float, v1: float) -> void:
+	# a,b = this cross-section (left,right at v0); d,c = next (left,right at v1).
+	var uvs := [Vector2(0, v0), Vector2(1, v0), Vector2(1, v1), Vector2(0, v1)]
+	var pv := [a, b, c, d]
+	for idx in [0, 1, 2, 0, 2, 3]:
+		st.set_uv(uvs[idx])
+		st.add_vertex(pv[idx])
 
 # A per-instance material copy (lakes each need their own mask + bbox uniforms).
 func _material_for(is_lake: bool) -> Material:
