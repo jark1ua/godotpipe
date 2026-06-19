@@ -56,6 +56,14 @@ extends Node3D
 ## chunks quickly, so pending loads (and the threads behind them) can't pile up
 ## without limit. Loads are issued nearest-first.
 @export var max_in_flight: int = 16
+## Build each chunk's normal-fixed mesh and collision shape on a WorkerThreadPool
+## thread instead of the main thread. The build (mesh upload + trimesh bake) stalls
+## the main thread for several ms per chunk on the render/physics servers; doing it
+## off-thread is what keeps flying into new chunks from hitching/crashing. Turn off
+## only to A/B test whether the threaded build is implicated in a problem.
+@export var threaded_spawn: bool = true
+## Max finished chunk builds to attach to the tree per frame (cheap node assembly).
+@export var max_applies_per_frame: int = 3
 ## Print per-update streaming stats (player chunk, in-flight, spawned this frame,
 ## spawn time). Use to diagnose load hitches.
 @export var debug_streaming: bool = false
@@ -95,9 +103,8 @@ var _preview: Dictionary = {}  # "i_j" -> Node3D (editor-only, not saved)
 var _player: Node3D = null
 var _accum: float = 0.0
 var _logged_first: bool = false
-var _mesh_count: int = 0
 var _material: ShaderMaterial = null   # built once, shared by every chunk
-var _fixed_meshes: Dictionary = {}     # mesh RID -> true; fix each shared mesh once
+var _jobs: Dictionary = {}             # key -> background build job (see _spawn)
 var _pi: int = 0                       # player's current chunk (i, j); kept for
 var _pj: int = 0                       # nearest-first ordering of loads/spawns
 
@@ -148,8 +155,10 @@ func _process(delta: float) -> void:
 		print("TerrainStreamer: player at %s -> chunk (i=%d, j=%d); requesting load radius %d" % [
 			_player.global_position, _pi, _pj, load_radius])
 
-	# Spawn ready chunks (budgeted) and top up loads every frame so the budgeted
-	# spawn pipeline stays fed; the heavier free/debug pass runs on update_interval.
+	# Attach finished background builds, dispatch new ones from ready loads, and top
+	# up requests — all every frame so the pipeline stays fed; the heavier free/debug
+	# pass runs on update_interval.
+	_apply_jobs()
 	_poll_threaded()
 	_request_loads()
 	_accum += delta
@@ -158,8 +167,8 @@ func _process(delta: float) -> void:
 	_accum = 0.0
 	_free_distant_chunks()
 	if debug_streaming:
-		print("TerrainStreamer: chunk (%d,%d) loaded=%d pending=%d" % [
-			_pi, _pj, _loaded.size(), _pending.size()])
+		print("TerrainStreamer: chunk (%d,%d) loaded=%d pending=%d building=%d" % [
+			_pi, _pj, _loaded.size(), _pending.size(), _jobs.size()])
 
 # Request the nearest wanted-but-missing chunks in load_radius, capped by
 # max_in_flight. Nearest-first keeps the most visible ground filling in even when
@@ -184,6 +193,10 @@ func _request_loads() -> void:
 
 func _free_distant_chunks() -> void:
 	for key in _loaded.keys():
+		# Keep a chunk alive until its background build has landed, so we never
+		# orphan a worker task or re-spawn (and overwrite) a key that has one pending.
+		if _jobs.has(key):
+			continue
 		var parts := String(key).split("_")
 		var ci := int(parts[0])
 		var cj := int(parts[1])
@@ -191,10 +204,11 @@ func _free_distant_chunks() -> void:
 			(_loaded[key] as Node).queue_free()
 			_loaded.erase(key)
 
-# Poll in-flight loads and instance at most max_spawns_per_frame this frame.
-# Spawning (mesh upload + normal fix + trimesh collision) is the expensive part,
-# so we budget it and process the nearest ready chunks first. load_threaded_get is
-# only called for chunks we actually spawn now; the rest stay LOADED and wait.
+# Poll in-flight loads and instance at most max_spawns_per_frame this frame,
+# nearest first. Instancing is now cheap (the heavy mesh/collision build is handed
+# to a worker in _spawn), but we still budget it so a flood of finished loads can't
+# instance hundreds of node trees in one frame. load_threaded_get is only called
+# for chunks we instance now; the rest stay LOADED and wait.
 func _poll_threaded() -> void:
 	var ready: Array = []
 	for key in _pending.keys():
@@ -221,8 +235,8 @@ func _poll_threaded() -> void:
 		_spawn(key, ResourceLoader.load_threaded_get(path))
 		spawned += 1
 	if debug_streaming and spawned > 0:
-		print("TerrainStreamer: spawned %d/%d ready chunks in %.2f ms" % [
-			spawned, ready.size(), (Time.get_ticks_usec() - t0) / 1000.0])
+		print("TerrainStreamer: instanced %d/%d ready chunks in %.2f ms (jobs building=%d)" % [
+			spawned, ready.size(), (Time.get_ticks_usec() - t0) / 1000.0, _jobs.size()])
 
 # Blocking load + spawn of the single chunk the player stands on, used at spawn
 # time so collision exists before gravity can pull the player through the world.
@@ -235,38 +249,117 @@ func _ensure_chunk_under_player() -> void:
 	if _meta.has(key) and not _loaded.has(key):
 		var packed := load(_meta[key]["path"]) as PackedScene
 		if packed != null:
-			_spawn(key, packed)
+			_spawn(key, packed, true)  # sync: ground + collision ready this frame
 
-func _spawn(key: String, packed: PackedScene) -> void:
-	if _loaded.has(key) or packed == null:
+# Instance the chunk and apply its material on the main thread (cheap), then build
+# the normal-fixed mesh and trimesh collision on a worker thread. The heavy build
+# is what stalls the main thread (mesh upload + collision bake hit the render /
+# physics servers), so off-loading it is what stops the hitch/crash when new chunks
+# stream in. _apply_jobs() attaches the finished build a frame or two later. Pass
+# sync=true to do the whole thing inline (the under-player chunk; the toggle off).
+func _spawn(key: String, packed: PackedScene, sync: bool = false) -> void:
+	if _loaded.has(key) or _jobs.has(key) or packed == null:
 		return
 	var inst := packed.instantiate() as Node3D
 	inst.position = _meta[key]["pos"]
 	add_child(inst)
 	_loaded[key] = inst
-	_mesh_count = 0
-	_setup_meshes(inst, add_collision)
+	var meshes: Array = []
+	_collect_meshes(inst, meshes)
 	if _loaded.size() == 1:
 		print("TerrainStreamer: first chunk '%s' spawned at %s with %d MeshInstance3D(s)" % [
-			key, inst.position, _mesh_count])
+			key, inst.position, meshes.size()])
+	if sync or not threaded_spawn:
+		_build_meshes_now(meshes)
+		return
+	# Pull the surface arrays out here on the main thread (a cheap readback); the
+	# worker only does pure-CPU normal math and the resource build, so it never
+	# touches the source mesh on the rendering server from another thread.
+	var job := {"key": key, "meshes": meshes, "surfaces": [], "results": []}
+	for mi in meshes:
+		job["surfaces"].append(_extract_surfaces((mi as MeshInstance3D).mesh as ArrayMesh))
+	job["task_id"] = WorkerThreadPool.add_task(_build_chunk.bind(job), false, "terrain_chunk:" + key)
+	_jobs[key] = job
 
-func _setup_meshes(node: Node, with_collision: bool) -> void:
+# Gather every MeshInstance3D under a freshly-instanced chunk and apply the shared
+# terrain material now, so the chunk renders correctly even before its fixed mesh
+# (and collision) lands from the worker.
+func _collect_meshes(node: Node, out: Array) -> void:
 	var mat := _get_material()
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			var mi := child as MeshInstance3D
-			_mesh_count += 1
-			if fix_edge_normals:
-				_fix_chunk_normals(mi)
 			if mat != null:
 				mi.material_override = mat
-			if with_collision and mi.mesh != null:
-				var body := StaticBody3D.new()
-				var cs := CollisionShape3D.new()
-				cs.shape = mi.mesh.create_trimesh_shape()
-				body.add_child(cs)
-				mi.add_child(body)
-		_setup_meshes(child, with_collision)
+			out.append(mi)
+		_collect_meshes(child, out)
+
+# Runs on a WorkerThreadPool thread: from the surface arrays pulled on the main
+# thread, build each mesh's normal-fixed copy and its trimesh collision shape. Mesh
+# and shape creation route through the engine's thread-safe server command queues
+# (the same path threaded scene loading uses). Results are read on the main thread
+# in _apply_jobs only after the task reports complete, so there is no data race.
+func _build_chunk(job: Dictionary) -> void:
+	var results: Array = []
+	for surfaces in job["surfaces"]:
+		var entry := {"mesh": null, "shape": null}
+		if not (surfaces as Array).is_empty():
+			var built := _build_fixed_mesh(surfaces, fix_edge_normals)
+			if fix_edge_normals and built["changed"]:
+				entry["mesh"] = built["mesh"]          # swap display mesh only when normals changed
+			if add_collision:
+				entry["shape"] = (built["mesh"] as ArrayMesh).create_trimesh_shape()
+		results.append(entry)
+	job["results"] = results
+
+# Attach finished worker builds to the tree (cheap: assign mesh, add a static body).
+func _apply_jobs() -> void:
+	if _jobs.is_empty():
+		return
+	var applied := 0
+	for key in _jobs.keys():
+		if applied >= max_applies_per_frame:
+			break
+		var job: Dictionary = _jobs[key]
+		if not WorkerThreadPool.is_task_completed(job["task_id"]):
+			continue
+		WorkerThreadPool.wait_for_task_completion(job["task_id"])  # releases the task
+		_jobs.erase(key)
+		applied += 1
+		# The chunk may have been freed (flown past) before its build landed.
+		if not _loaded.has(key) or not is_instance_valid(_loaded[key]):
+			continue
+		var meshes: Array = job["meshes"]
+		var results: Array = job["results"]
+		for i in range(meshes.size()):
+			var mi := meshes[i] as MeshInstance3D
+			if not is_instance_valid(mi):
+				continue
+			var r: Dictionary = results[i]
+			if r["mesh"] != null:
+				mi.mesh = r["mesh"]
+			if add_collision and r["shape"] != null:
+				_attach_collision(mi, r["shape"])
+
+# Synchronous build for the under-player chunk (and the threaded_spawn=off path).
+func _build_meshes_now(meshes: Array) -> void:
+	for mi_any in meshes:
+		var mi := mi_any as MeshInstance3D
+		var surfaces := _extract_surfaces(mi.mesh as ArrayMesh)
+		if surfaces.is_empty():
+			continue
+		var built := _build_fixed_mesh(surfaces, fix_edge_normals)
+		if fix_edge_normals and built["changed"]:
+			mi.mesh = built["mesh"]
+		if add_collision:
+			_attach_collision(mi, (built["mesh"] as ArrayMesh).create_trimesh_shape())
+
+func _attach_collision(mi: MeshInstance3D, shape: Shape3D) -> void:
+	var body := StaticBody3D.new()
+	var cs := CollisionShape3D.new()
+	cs.shape = shape
+	body.add_child(cs)
+	mi.add_child(body)
 
 # ---- Edge-normal repair (kills the dark grid along chunk seams) ---------------
 #
@@ -276,38 +369,35 @@ func _setup_meshes(node: Node, with_collision: bool) -> void:
 # skirt-wall normal — tilting the whole edge row outward and shading it darker.
 # Across all chunks that paints a grid of shadow lines on the seams.
 #
-# Fix: recompute vertex normals from the surface faces only, excluding faces that
-# are nearly vertical (the skirt). Edge-top verts then take their normal from the
-# flat top alone and match across chunks, so the grid disappears. The skirts stay
-# (they still hide cracks); only the contaminated normals change. The chunk mesh
-# is a shared sub-resource, so each is fixed once and the change covers every
-# instance of that chunk.
-func _fix_chunk_normals(mi: MeshInstance3D) -> void:
-	var mesh := mi.mesh as ArrayMesh
-	if mesh == null:
-		return
-	var rid := mesh.get_rid()
-	if _fixed_meshes.has(rid):
-		return
-	_fixed_meshes[rid] = true
-	# Bail unless every surface is plain triangles — we rebuild from arrays and
-	# don't want to silently drop strips/points or per-surface materials we can't
-	# re-attach. Terrain chunks are triangle soup, so this normally passes.
-	for s in range(mesh.get_surface_count()):
-		if mesh.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
-			return
-	var fixed_arrays: Array = []
-	var any := false
-	for s in range(mesh.get_surface_count()):
-		var arrays: Array = mesh.surface_get_arrays(s)
-		if _recompute_surface_normals(arrays):
-			any = true
-		fixed_arrays.append(arrays)
-	if not any:
-		return
-	mesh.clear_surfaces()
-	for arrays in fixed_arrays:
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+# Fix: build a copy of the mesh whose vertex normals come from the surface faces
+# only, excluding the near-vertical skirt faces. Edge-top verts then take their
+# normal from the flat top alone and match across chunks, so the grid disappears.
+# The skirts stay (they still hide cracks); only the normals change.
+#
+# Pull the triangle surface arrays out of a source mesh (main thread; a cheap
+# readback). Returns [] if the mesh has any non-triangle surface, so we never try
+# to faithfully rebuild something we can't.
+func _extract_surfaces(src: ArrayMesh) -> Array:
+	var out: Array = []
+	if src == null:
+		return out
+	for s in range(src.get_surface_count()):
+		if src.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
+			return []
+		out.append(src.surface_get_arrays(s))
+	return out
+
+# Build an ArrayMesh from extracted surface arrays, optionally recomputing normals
+# to drop the skirt contamination. Pure data + resource creation, so it is safe to
+# call from a worker thread. Returns { "mesh": ArrayMesh, "changed": bool }.
+func _build_fixed_mesh(surfaces: Array, do_fix: bool) -> Dictionary:
+	var out := ArrayMesh.new()
+	var changed := false
+	for arrays in surfaces:
+		if do_fix and _recompute_surface_normals(arrays):
+			changed = true
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return {"mesh": out, "changed": changed}
 
 # Recompute ARRAY_NORMAL in-place from the triangle faces, skipping near-vertical
 # (skirt) faces. Returns true if normals were written.
@@ -376,7 +466,17 @@ func _load_editor_preview() -> void:
 			inst.position = _meta[key]["pos"]
 			add_child(inst)
 			# No owner -> these nodes are not serialised into the .tscn.
-			_setup_meshes(inst, false)
+			# Material + normal fix only (no collision, no threading in preview).
+			var meshes: Array = []
+			_collect_meshes(inst, meshes)
+			if fix_edge_normals:
+				for mi_any in meshes:
+					var mi := mi_any as MeshInstance3D
+					var surfaces := _extract_surfaces(mi.mesh as ArrayMesh)
+					if not surfaces.is_empty():
+						var built := _build_fixed_mesh(surfaces, true)
+						if built["changed"]:
+							mi.mesh = built["mesh"]
 			_preview[key] = inst
 	print("TerrainStreamer preview: %d chunks around %s" % [_preview.size(), preview_focus_chunk])
 
