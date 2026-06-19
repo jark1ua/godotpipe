@@ -46,6 +46,19 @@ extends Node3D
 @export var terrain_material: Material
 ## Seconds between streaming updates.
 @export var update_interval: float = 0.25
+## Max chunks to instance per frame (mesh + normal fix + collision bake). This is
+## the heavy, main-thread part; capping it spreads the work so a burst of chunks
+## finishing at once — flying fast, or the first frames after F6 — can't spike the
+## frame long enough to stall/crash the game. Raise for faster fill, lower if you
+## still see hitches.
+@export var max_spawns_per_frame: int = 2
+## Max chunk loads in flight at once. Bounds the request backlog when you cross
+## chunks quickly, so pending loads (and the threads behind them) can't pile up
+## without limit. Loads are issued nearest-first.
+@export var max_in_flight: int = 16
+## Print per-update streaming stats (player chunk, in-flight, spawned this frame,
+## spawn time). Use to diagnose load hitches.
+@export var debug_streaming: bool = false
 
 @export_group("Terrain Material (control map + arrays)")
 ## 32-layer manifest (names, texture_set, tile_meters, triplanar) baked in Blender.
@@ -85,6 +98,8 @@ var _logged_first: bool = false
 var _mesh_count: int = 0
 var _material: ShaderMaterial = null   # built once, shared by every chunk
 var _fixed_meshes: Dictionary = {}     # mesh RID -> true; fix each shared mesh once
+var _pi: int = 0                       # player's current chunk (i, j); kept for
+var _pj: int = 0                       # nearest-first ordering of loads/spawns
 
 func _ready() -> void:
 	_load_manifest()
@@ -124,45 +139,90 @@ func _load_manifest() -> void:
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
-	_accum += delta
-	_poll_threaded()
-	if _accum < update_interval or _player == null:
+	if _player == null:
 		return
-	_accum = 0.0
-	var pj := int(round(_player.global_position.x / _step)) + _center
-	var pi := int(round(-_player.global_position.z / _step)) + _center
+	_pj = int(round(_player.global_position.x / _step)) + _center
+	_pi = int(round(-_player.global_position.z / _step)) + _center
 	if not _logged_first:
 		_logged_first = true
 		print("TerrainStreamer: player at %s -> chunk (i=%d, j=%d); requesting load radius %d" % [
-			_player.global_position, pi, pj, load_radius])
+			_player.global_position, _pi, _pj, load_radius])
 
-	# request loads within load_radius
+	# Spawn ready chunks (budgeted) and top up loads every frame so the budgeted
+	# spawn pipeline stays fed; the heavier free/debug pass runs on update_interval.
+	_poll_threaded()
+	_request_loads()
+	_accum += delta
+	if _accum < update_interval:
+		return
+	_accum = 0.0
+	_free_distant_chunks()
+	if debug_streaming:
+		print("TerrainStreamer: chunk (%d,%d) loaded=%d pending=%d" % [
+			_pi, _pj, _loaded.size(), _pending.size()])
+
+# Request the nearest wanted-but-missing chunks in load_radius, capped by
+# max_in_flight. Nearest-first keeps the most visible ground filling in even when
+# we can't keep up; the in-flight cap stops the request backlog (and its loader
+# threads) exploding when crossing chunks fast — the main cause of the fly stall.
+func _request_loads() -> void:
+	if _pending.size() >= max_in_flight:
+		return
+	var wanted: Array = []
 	for di in range(-load_radius, load_radius + 1):
 		for dj in range(-load_radius, load_radius + 1):
-			var key := "%d_%d" % [pi + di, pj + dj]
+			var key := "%d_%d" % [_pi + di, _pj + dj]
 			if _meta.has(key) and not _loaded.has(key) and not _pending.has(key):
-				ResourceLoader.load_threaded_request(_meta[key]["path"])
-				_pending[key] = _meta[key]["path"]
+				wanted.append([di * di + dj * dj, key])
+	wanted.sort_custom(func(a, b): return a[0] < b[0])
+	for entry in wanted:
+		if _pending.size() >= max_in_flight:
+			break
+		var key: String = entry[1]
+		ResourceLoader.load_threaded_request(_meta[key]["path"])
+		_pending[key] = _meta[key]["path"]
 
-	# free chunks beyond keep_radius
+func _free_distant_chunks() -> void:
 	for key in _loaded.keys():
 		var parts := String(key).split("_")
 		var ci := int(parts[0])
 		var cj := int(parts[1])
-		if max(abs(ci - pi), abs(cj - pj)) > keep_radius:
+		if max(abs(ci - _pi), abs(cj - _pj)) > keep_radius:
 			(_loaded[key] as Node).queue_free()
 			_loaded.erase(key)
 
+# Poll in-flight loads and instance at most max_spawns_per_frame this frame.
+# Spawning (mesh upload + normal fix + trimesh collision) is the expensive part,
+# so we budget it and process the nearest ready chunks first. load_threaded_get is
+# only called for chunks we actually spawn now; the rest stay LOADED and wait.
 func _poll_threaded() -> void:
+	var ready: Array = []
 	for key in _pending.keys():
-		var path: String = _pending[key]
-		var st := ResourceLoader.load_threaded_get_status(path)
+		var st := ResourceLoader.load_threaded_get_status(_pending[key])
 		if st == ResourceLoader.THREAD_LOAD_LOADED:
-			_pending.erase(key)
-			_spawn(key, ResourceLoader.load_threaded_get(path))
+			var parts := String(key).split("_")
+			var di := int(parts[0]) - _pi
+			var dj := int(parts[1]) - _pj
+			ready.append([di * di + dj * dj, key])
 		elif st == ResourceLoader.THREAD_LOAD_FAILED or st == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+			push_warning("Terrain chunk failed to load: " + String(_pending[key]))
 			_pending.erase(key)
-			push_warning("Terrain chunk failed to load: " + path)
+	if ready.is_empty():
+		return
+	ready.sort_custom(func(a, b): return a[0] < b[0])
+	var t0 := Time.get_ticks_usec()
+	var spawned := 0
+	for entry in ready:
+		if spawned >= max_spawns_per_frame:
+			break
+		var key: String = entry[1]
+		var path: String = _pending[key]
+		_pending.erase(key)
+		_spawn(key, ResourceLoader.load_threaded_get(path))
+		spawned += 1
+	if debug_streaming and spawned > 0:
+		print("TerrainStreamer: spawned %d/%d ready chunks in %.2f ms" % [
+			spawned, ready.size(), (Time.get_ticks_usec() - t0) / 1000.0])
 
 # Blocking load + spawn of the single chunk the player stands on, used at spawn
 # time so collision exists before gravity can pull the player through the world.

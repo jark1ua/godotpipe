@@ -49,10 +49,10 @@ uniform float normal_strength       : hint_range(0.0, 2.0) = 1.0;
 // world-XZ UV plane is invalid). The control map is always sampled at the
 // un-parallaxed UV, so POM never changes which layer lives where.
 uniform bool enable_parallax = true;
-uniform float parallax_scale : hint_range(0.0, 0.5) = 0.08;    // apparent depth, fraction of a tile
-uniform float parallax_min_view : hint_range(0.05, 1.0) = 0.3; // clamp at grazing angles
+uniform float parallax_scale : hint_range(0.0, 0.2) = 0.03;    // apparent depth, fraction of a tile
+uniform float parallax_min_view : hint_range(0.05, 1.0) = 0.4; // clamp at grazing angles
 uniform int parallax_min_steps : hint_range(2, 32) = 8;        // march steps looking straight down
-uniform int parallax_max_steps : hint_range(4, 64) = 32;       // march steps at grazing angles
+uniform int parallax_max_steps : hint_range(4, 32) = 24;       // march steps at grazing angles
 
 varying vec3 v_world_pos;
 varying vec3 v_world_normal;
@@ -68,14 +68,20 @@ void vertex() {
 void sample_layer(int layer, vec2 world_off, float tri_amt, vec3 tri_w,
 		out vec3 albedo, out vec3 nrm, out float ao, out float rough, out float height) {
 	float tile = layer_tile_m[layer] > 0.0 ? layer_tile_m[layer] : default_tile_m;
-	vec2 puv = (v_world_pos.xz + world_off) / tile;
+	vec2 base_uv = v_world_pos.xz / tile;
+	vec2 puv = base_uv + world_off / tile;
 	float fl = float(layer);
 
-	albedo = texture(albedo_array, vec3(puv, fl)).rgb;
-	nrm    = texture(normal_array, vec3(puv, fl)).rgb;
-	ao     = texture(ao_array,     vec3(puv, fl)).r;
-	rough  = texture(rough_array,  vec3(puv, fl)).r;
-	height = texture(height_array, vec3(puv, fl)).r;
+	// Select the mip from the smooth surface UV, not the parallax-shifted one: the
+	// POM offset jumps between neighbouring pixels, so letting the GPU derive the
+	// mip from puv blows up the implicit derivatives and over-blurs the detail.
+	vec2 ddx = dFdx(base_uv);
+	vec2 ddy = dFdy(base_uv);
+	albedo = textureGrad(albedo_array, vec3(puv, fl), ddx, ddy).rgb;
+	nrm    = textureGrad(normal_array, vec3(puv, fl), ddx, ddy).rgb;
+	ao     = textureGrad(ao_array,     vec3(puv, fl), ddx, ddy).r;
+	rough  = textureGrad(rough_array,  vec3(puv, fl), ddx, ddy).r;
+	height = textureGrad(height_array, vec3(puv, fl), ddx, ddy).r;
 
 	float t = tri_amt * layer_triplanar[layer];
 	if (t > 0.001) {
@@ -104,8 +110,8 @@ float height_blend_weight(float base_h, float over_h, float t) {
 
 // Parallax Occlusion Mapping. Marches a layer's height field along the tangent-
 // space view direction and returns the detail-UV offset (in tile/UV units) at the
-// occluded hit. view_ts = view dir (surface->camera) in the flat-ground tangent
-// frame (x = +X tangent, y = +Z bitangent, z = +Y normal); fl is the layer slice.
+// occluded hit. view_ts = view dir (surface->camera) in the surface tangent frame
+// (x along +X UV axis, y along +Z UV axis, z = surface normal); fl is the layer.
 vec2 pom_offset(vec2 base_uv, vec3 view_ts, float fl) {
 	float ndotv = max(view_ts.z, parallax_min_view);
 	// More steps at grazing angles (view_ts.z small), fewer looking straight down.
@@ -121,7 +127,7 @@ vec2 pom_offset(vec2 base_uv, vec3 view_ts, float fl) {
 	float cur_depth = 0.0;
 	vec2 cur_uv = base_uv;
 	float surf_depth = 1.0 - textureLod(height_array, vec3(cur_uv, fl), 0.0).r;
-	for (int i = 0; i < 64; i++) {
+	for (int i = 0; i < 32; i++) {
 		if (float(i) >= n_steps || cur_depth >= surf_depth) break;
 		cur_uv -= delta_uv;
 		cur_depth += layer_depth;
@@ -156,8 +162,15 @@ void fragment() {
 	vec2 world_off = vec2(0.0);
 	if (enable_parallax && tri_amt < 0.999) {
 		vec3 wv = normalize(CAMERA_POSITION_WORLD - v_world_pos);
-		// Flat-ground tangent frame: T=+X, B=+Z, N=+Y -> view dir in tangent space.
-		vec3 view_ts = vec3(wv.x, wv.z, wv.y);
+		// Slope-aware tangent frame aligned to the world-XZ UV axes (UV = xz/tile).
+		// Surface y = f(x,z); from the normal df/dx = -wn.x/wn.y, df/dz = -wn.z/wn.y,
+		// so the UV-axis tangents are (1, df/dx, 0) and (0, df/dz, 1). Using the true
+		// normal (not a flat +Y) keeps the parallax direction and the grazing-angle
+		// term correct on sloped ground, which is what made the old version warp.
+		float ny = max(wn.y, 0.2);  // POM only runs below the triplanar slope, so ny stays safe
+		vec3 T = normalize(vec3(1.0, -wn.x / ny, 0.0));
+		vec3 B = normalize(vec3(0.0, -wn.z / ny, 1.0));
+		vec3 view_ts = vec3(dot(wv, T), dot(wv, B), dot(wv, wn));
 		float btile = layer_tile_m[base_l] > 0.0 ? layer_tile_m[base_l] : default_tile_m;
 		vec2 base_uv = v_world_pos.xz / btile;
 		vec2 uv_off = pom_offset(base_uv, view_ts, float(base_l));
