@@ -1,4 +1,4 @@
-@tool
+r@tool
 extends Node3D
 ## Streams Blender-exported terrain chunks around a player.
 ## Reads terrain_manifest.json and loads/frees Chunk_II_JJ.glb by distance.
@@ -75,7 +75,7 @@ extends Node3D
 ## 32-layer manifest (names, texture_set, tile_meters, triplanar) baked in Blender.
 @export_file("*.json") var layer_manifest_path: String = "res://terrain/control_map_layers.json"
 ## 16-bit single-channel control map: base(5) | overlay(5) | blend(5) per texel.
-@export_file var control_map_path: String = "res://terrain/terrain_control_map.png"
+@export_file var control_map_path: String = "res://terrain/terrain_control_map.exr"
 ## Folder of base PBR sets: <sets_dir>/<set>/{albedo,normal,height,ao,rough}.png.
 ## Used as the fallback for any layer that has no dedicated textures yet.
 @export_dir var sets_dir: String = "res://terrain/arrays/sets"
