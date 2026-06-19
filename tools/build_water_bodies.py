@@ -36,11 +36,21 @@ Output
 Re-run whenever the terrain chunks are re-exported (this is a derived asset, like
 tools/bake_chunk_normals.py -- keep it committed and idempotent).
 
+Lake strictness (so the water only sits in real, sealed basins)
+---------------------------------------------------------------
+A basin is kept only if it is large enough (--min-area), genuinely deep somewhere
+(--min-depth), a SINGLE spill level (cells are connected only within --level-tol so two
+pits at different levels never merge into one plane that floats above the lower rim), and
+CONTAINED (its rim is sealed except the pour point; >--open-frac of the rim below the
+water level => rejected). The flat level is the basin's pour-point elevation, so the plane
+can't poke out the side.
+
 Usage
 -----
-    python3 tools/build_water_bodies.py [--res 512] [--sea 0.0] [--min-area 8]
-        [--shore-dilate 2] [--river-threshold 220] [--paint-control-map]
-        [--pebble-band 2] [--pebble-layer 21]
+    python3 tools/build_water_bodies.py [--res 512] [--sea 0.0] [--min-area 16]
+        [--min-depth 3.0] [--level-tol 0.6] [--open-frac 0.12] [--shore-dilate 2]
+        [--river-threshold 650] [--river-min-points 10] [--paint-control-map]
+        [--pebble-band 3] [--river-band 1] [--pebble-layer 21]
         [--chunks DIR] [--manifest FILE] [--out FILE] [--masks DIR]
         [--control-map terrain/terrain_control_map.exr]
 """
@@ -188,8 +198,22 @@ def priority_flood(height, res, sea_level):
     return spill, order
 
 
-def find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_area):
-    """8-connected components of inland standing water (above sea level)."""
+def find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_area,
+               min_depth, level_tol):
+    """8-connected components of inland standing water (above sea level).
+
+    Two stricter rules vs. a plain flood-fill, both aimed at "the water sits in a place
+    that isn't really a basin / pokes out the side" (see CLAUDE.md water notes):
+
+      * Split by spill level. Priority-Flood gives every cell of ONE pit the same spill
+        (its pour-point elevation); adjacent pits meet at a step in spill. A naive
+        8-connected component can MERGE two pits at different levels, and then a single
+        flat plane at max(spill) floats above the lower pit's rim — exposed water. So we
+        only connect neighbours whose spill is within `level_tol` of each other; each
+        connected blob is then a single-level basin.
+      * Require real depth. A 0.5 m film over a max-pooled, noisy coarse cell is not a
+        lake. Keep a component only if its deepest cell is at least `min_depth` below the
+        spill (and it clears min_area)."""
     is_lake = bytearray(res * res)
     for i in range(res * res):
         if spill[i] - height[i] > depth_eps and spill[i] > sea_level + lake_above_sea:
@@ -214,12 +238,47 @@ def find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_are
                     ny, nx = y + dy, x + dx
                     if 0 <= ny < res and 0 <= nx < res:
                         nidx = ny * res + nx
-                        if is_lake[nidx] and not seen[nidx]:
+                        # Same-basin only: don't cross a spill step into a different pit.
+                        if (is_lake[nidx] and not seen[nidx]
+                                and abs(spill[nidx] - spill[idx]) <= level_tol):
                             seen[nidx] = 1
                             stack.append(nidx)
-        if len(cells) >= min_area:
-            lakes.append(cells)
+        if len(cells) < min_area:
+            continue
+        if max(spill[c] - height[c] for c in cells) < min_depth:
+            continue   # too shallow to be a real body of water
+        lakes.append(cells)
     return lakes
+
+
+def basin_level_and_containment(cells, spill, height, res, rim_eps):
+    """Pick a lake's flat water level and measure how well the basin contains it.
+
+    level = MIN spill over the component (with the spill-split in find_lakes the cells are
+    already one level, so min vs max barely differ; min is the safe choice — it never sits
+    above the pour point, so the plane can't poke out a low spot from coarse-grid error).
+
+    A true basin is sealed: every rim cell (an 8-neighbour just OUTSIDE the body) stands at
+    or above the water level, EXCEPT the one or two cells at the pour point. We return the
+    count of rim cells that fall below the level by more than rim_eps; main() rejects bodies
+    whose rim is too open (they'd drain / show exposed water at the side)."""
+    level = min(spill[c] for c in cells)
+    body = set(cells)
+    rim = set()
+    for idx in cells:
+        y = idx // res
+        x = idx % res
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < res and 0 <= nx < res:
+                    nidx = ny * res + nx
+                    if nidx not in body:
+                        rim.add(nidx)
+    open_cells = sum(1 for r in rim if height[r] < level - rim_eps)
+    return level, open_cells, len(rim)
 
 
 def dilate(cells, res, n):
@@ -292,7 +351,7 @@ def extract_rivers(acc, height, down, res, sea_level, threshold, lake_set, world
         if acc[i] >= threshold and height[i] > sea_level and i not in lake_set:
             river.add(i)
     if not river:
-        return river, []
+        return river, [], set()
 
     def wx(gx):
         return gx / (res - 1) * world - half
@@ -318,13 +377,17 @@ def extract_rivers(acc, height, down, res, sea_level, threshold, lake_set, world
 
     consumed = set()
     polylines = []
+    rendered = set()   # grid cells of rivers we actually KEEP (>= min_points) — these,
+                       # not the whole accumulation field, drive the pebble banks
     for hw in heads:
         if hw in consumed:
             continue
         pts = []
+        cells_here = []
         c = hw
         while c is not None:
             pts.append(point(c))
+            cells_here.append(c)
             if c in consumed:        # joined an already-traced channel; stop at the junction
                 break
             consumed.add(c)
@@ -334,10 +397,12 @@ def extract_rivers(acc, height, down, res, sea_level, threshold, lake_set, world
             else:
                 if d >= 0:           # final step into the sea / a lake / the map edge
                     pts.append(point(d))
+                    cells_here.append(d)
                 c = None
         if len(pts) >= min_points:
             polylines.append(pts)
-    return river, polylines
+            rendered.update(cells_here)
+    return river, polylines, rendered
 
 
 def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer):
@@ -393,16 +458,23 @@ def write_gray_png(path, w, h, rows):
 def main(argv):
     res = 512
     sea_level = 0.0
-    min_area = 8
-    depth_eps = 0.5
+    min_area = 16             # min cells (~0.002 km2) for a body to count
+    depth_eps = 0.5           # cell counts as standing water past this depth
+    min_depth = 3.0           # a body's DEEPEST cell must clear this (drop shallow noise)
+    level_tol = 0.6           # connect cells only within this spill step (split merged pits)
+    open_frac = 0.12          # reject a basin if more than this fraction of its rim is
+    rim_open_min = 3          # below water level (would spill); always allow a small pour
+    rim_eps = 0.4             # how far below level a rim cell must be to count as "open"
     lake_above_sea = 1.0
     shore_dilate = 2
-    river_threshold = 220      # upstream cells (~0.03 km2) before a flow line is a river
+    river_threshold = 650      # upstream cells before a flow line is a river (higher than
+                               # before: 220 painted the whole drainage net as pebble lines)
+    river_min_points = 10      # drop short stub channels (render + pebble)
     river_min_w = 4.0
     river_max_w = 26.0
     river_lift = 0.3           # raise the ribbon this far above the terrain sample
     paint_cm = False
-    pebble_band = 4            # lake pebble shore (cells); needs > shore_dilate to clear
+    pebble_band = 3            # lake pebble shore (cells); needs > shore_dilate to clear
                               # the water plane's own overhang and stay visible on land
     river_band = 1            # pebble bank on each side of a river channel (cells)
     pebble_layer = 21          # control-map layer index to stamp (21 = pebble_field)
@@ -418,8 +490,12 @@ def main(argv):
         if t == "--res": i += 1; res = int(a[i])
         elif t == "--sea": i += 1; sea_level = float(a[i])
         elif t == "--min-area": i += 1; min_area = int(a[i])
+        elif t == "--min-depth": i += 1; min_depth = float(a[i])
+        elif t == "--level-tol": i += 1; level_tol = float(a[i])
+        elif t == "--open-frac": i += 1; open_frac = float(a[i])
         elif t == "--shore-dilate": i += 1; shore_dilate = int(a[i])
         elif t == "--river-threshold": i += 1; river_threshold = int(a[i])
+        elif t == "--river-min-points": i += 1; river_min_points = int(a[i])
         elif t == "--paint-control-map": paint_cm = True
         elif t == "--pebble-band": i += 1; pebble_band = int(a[i])
         elif t == "--river-band": i += 1; river_band = int(a[i])
@@ -445,20 +521,36 @@ def main(argv):
 
     sea_set = set(i for i in range(res * res)
                   if spill[i] - height[i] > depth_eps and spill[i] <= sea_level + lake_above_sea)
-    lakes = find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_area)
-    lakes.sort(key=len, reverse=True)
+    found = find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_area,
+                       min_depth, level_tol)
+    # Containment gate: keep only basins that actually hold water (rim sealed except the
+    # pour point). This drops "lakes" the flood found on open slopes — the ones that
+    # rendered with water exposed/hanging off the side.
+    lakes = []          # [(cells, level)]
+    rejected_open = 0
+    for cells in found:
+        level, open_cells, rim = basin_level_and_containment(cells, spill, height, res, rim_eps)
+        if open_cells > max(rim_open_min, int(open_frac * rim)):
+            rejected_open += 1
+            continue
+        lakes.append((cells, level))
+    lakes.sort(key=lambda cl: len(cl[0]), reverse=True)
     lake_set = set()
-    for cells in lakes:
+    for cells, _ in lakes:
         lake_set.update(cells)
-    print("Sea/ocean covers ~%d cells (%.1f km2). Found %d inland lake(s) >= %d cells." % (
-        len(sea_set), len(sea_set) * cell_m * cell_m / 1e6, len(lakes), min_area))
+    print("Sea/ocean covers ~%d cells (%.1f km2). Kept %d inland lake(s) (>=%d cells, "
+          ">=%.1f m deep, contained); rejected %d un-contained basin(s)." % (
+        len(sea_set), len(sea_set) * cell_m * cell_m / 1e6, len(lakes), min_area,
+        min_depth, rejected_open))
 
     print("Routing flow (D8) and tracing rivers (threshold %d cells)..." % river_threshold)
     down = flow_directions(spill, order, res)
     acc = flow_accumulation(down, spill, order, res)
-    river_set, rivers = extract_rivers(acc, height, down, res, sea_level, river_threshold,
-                                       lake_set, world, half, river_min_w, river_max_w, river_lift)
-    print("Rivers: %d cell(s) of channel traced into %d polyline(s)." % (len(river_set), len(rivers)))
+    river_set, rivers, rendered_rivers = extract_rivers(
+        acc, height, down, res, sea_level, river_threshold, lake_set, world, half,
+        river_min_w, river_max_w, river_lift, min_points=river_min_points)
+    print("Rivers: %d drainage cell(s); kept %d polyline(s) covering %d channel cell(s)." % (
+        len(river_set), len(rivers), len(rendered_rivers)))
 
     if not os.path.isdir(masks_dir):
         os.makedirs(masks_dir)
@@ -470,10 +562,10 @@ def main(argv):
         return half - gy / (res - 1) * world
 
     bodies = []
-    for li, cells in enumerate(lakes):
-        level = max(spill[c] for c in cells)
-        # The surface level comes from the true water cells; the rendered/queried mask
-        # is dilated so the water runs up into the shore and sits flush (no rim gap).
+    for li, (cells, level) in enumerate(lakes):
+        # level is the basin's contained pour-point elevation (see
+        # basin_level_and_containment); the rendered/queried mask is dilated so the water
+        # runs up into the shore and sits flush (no rim gap).
         mask_cells = dilate(cells, res, shore_dilate)
         xs = [c % res for c in mask_cells]
         ys = [c // res for c in mask_cells]
@@ -522,11 +614,14 @@ def main(argv):
         out_path, len(bodies), len(river_bodies), len(bodies), masks_dir))
 
     if paint_cm:
-        # Pebble = the visible shore of LAKES and RIVERS only (the ocean coast already
-        # reads as sand). Lakes get a wider band (their water plane overhangs the shore
-        # by shore_dilate cells, so pebble must reach past that); rivers get a thin bank.
-        # Drop lake interiors and sea cells so we only repaint visible land + riverbeds.
-        pebble_cells = (dilate(lake_set, res, pebble_band) | dilate(river_set, res, river_band))
+        # Pebble = the visible shore of the KEPT lakes and the RENDERED rivers only (the
+        # ocean coast already reads as sand). Lakes get a ring a little wider than the
+        # water plane's overhang (shore_dilate); rivers get a thin bank along the actual
+        # channels we kept — NOT the whole D8 accumulation field, which previously painted
+        # arbitrary pebble lines across the map. Drop lake interiors and sea so only the
+        # visible shore/bank lands on the control map.
+        pebble_cells = (dilate(lake_set, res, pebble_band)
+                        | dilate(rendered_rivers, res, river_band))
         pebble_cells = pebble_cells - lake_set - sea_set
         print("Painting pebble layer %d into %s over %d shore/bed cell(s)..." % (
             pebble_layer, control_path, len(pebble_cells)))

@@ -45,6 +45,11 @@ func _load() -> void:
 			var tex := load(path) as Texture2D
 			if tex != null:
 				img = tex.get_image()
+				# Imported textures come back VRAM/lossless-compressed; get_pixel() throws
+				# "Can't get_pixel() on compressed image" on those. Decompress to a plain
+				# format once here so the per-blade _mask_hit() lookups are safe & cheap.
+				if img != null and img.is_compressed():
+					img.decompress()
 		_lakes.append({
 			"level": float(lake["level"]),
 			"min_x": float(lake["min_x"]), "max_x": float(lake["max_x"]),
@@ -84,8 +89,9 @@ func _mask_hit(l: Dictionary, x: float, z: float) -> bool:
 	var img: Image = l["img"]
 	if img == null:
 		return true   # mask missing (not imported yet) -> fall back to the bbox
-	var u := (x - l["min_x"]) / maxf(l["max_x"] - l["min_x"], 1e-3)
-	var v := (l["max_z"] - z) / maxf(l["max_z"] - l["min_z"], 1e-3)
+	# Dictionary subscripts are Variant, so := can't infer a type here — annotate float.
+	var u: float = (x - l["min_x"]) / maxf(l["max_x"] - l["min_x"], 1e-3)
+	var v: float = (l["max_z"] - z) / maxf(l["max_z"] - l["min_z"], 1e-3)
 	var px := clampi(int(u * float(l["w"] - 1)), 0, l["w"] - 1)
 	var py := clampi(int(v * float(l["h"] - 1)), 0, l["h"] - 1)
 	return img.get_pixel(px, py).r > 0.5
