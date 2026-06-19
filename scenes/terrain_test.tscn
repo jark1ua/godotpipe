@@ -14,11 +14,12 @@
 ; the mouse (Esc again -> main menu). To tinker with the terrain inside the
 ; editor (no play), select the Terrain node and click "Load Editor Preview".
 ; ============================================================================
-[gd_scene load_steps=8 format=3 uid="uid://bterraintest001"]
+[gd_scene load_steps=9 format=3 uid="uid://bterraintest001"]
 
 [ext_resource type="Script" path="res://scripts/TerrainPlayer.gd" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/Terrain.tscn" id="2_terrain"]
 [ext_resource type="PackedScene" path="res://scenes/Grass.tscn" id="3_grass"]
+[ext_resource type="PackedScene" path="res://scenes/Water.tscn" id="4_water"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_horizon_color = Color(0.64, 0.66, 0.7, 1)
@@ -67,4 +68,7 @@ far = 4000.0
 player_path = NodePath("../Player")
 
 [node name="Grass" parent="." instance=ExtResource("3_grass")]
+player_path = NodePath("../Player")
+
+[node name="Water" parent="." instance=ExtResource("4_water")]
 player_path = NodePath("../Player")
