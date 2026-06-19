@@ -1,0 +1,32 @@
+; ============================================================================
+; Grass.tscn — drop-in animated grass that scatters over the streamed terrain.
+; A Node3D running terrain/GrassScatterer.gd, pre-wired with a ShaderMaterial on
+; shaders/grass_wind.gdshader (wind + stylised gradient). Instance it next to your
+; TerrainStreamer and set Player Path. Plug your grass mesh into Grass Mesh; until
+; then a procedural blade tuft stands in so you can see the wind working.
+; ============================================================================
+[gd_scene load_steps=4 format=3 uid="uid://dgr4ss0scene01"]
+
+[ext_resource type="Script" path="res://terrain/GrassScatterer.gd" id="1_grass"]
+[ext_resource type="Shader" path="res://shaders/grass_wind.gdshader" id="2_wind"]
+
+[sub_resource type="ShaderMaterial" id="Mat_grass"]
+shader = ExtResource("2_wind")
+shader_parameter/base_color = Color(0.1, 0.28, 0.08, 1)
+shader_parameter/tip_color = Color(0.42, 0.68, 0.22, 1)
+shader_parameter/texture_mix = 0.0
+shader_parameter/alpha_scissor = 0.5
+shader_parameter/roughness_val = 0.9
+shader_parameter/ground_ao = 0.55
+shader_parameter/blade_height = 0.6
+shader_parameter/bend_exponent = 1.6
+shader_parameter/wind_dir = Vector2(1, 0.35)
+shader_parameter/wind_strength = 0.18
+shader_parameter/wind_speed = 1.2
+shader_parameter/wind_scale = 0.15
+shader_parameter/flutter_strength = 0.05
+shader_parameter/flutter_speed = 4.0
+
+[node name="Grass" type="Node3D"]
+script = ExtResource("1_grass")
+grass_material = SubResource("Mat_grass")
