@@ -301,6 +301,41 @@ def dilate(cells, res, n):
     return s
 
 
+def shore_band_dilate(cells, height, res, level, steps, rise_max, drop_max):
+    """Terrain-AWARE version of dilate for the rendered/queried water mask.
+
+    A plain dilate grows the flat water plane outward in every direction so it tucks under
+    the rising shore (flush, no rim gap). But across a thin ridge/lip it would cross to the
+    LOWER ground on the far side, and the flat plane then pokes out there ("water comes out
+    the other side"). So here we only step into a neighbour whose terrain sits in the SHORE
+    BAND around the water level — `level - drop_max <= height <= level + rise_max`. That
+    tucks the plane under the immediate low shore but stops dead at a ridge (too high) and
+    never leaks into a lower basin/valley beyond it (too low)."""
+    lo = level - drop_max
+    hi = level + rise_max
+    s = set(cells)
+    frontier = set(cells)
+    for _ in range(max(0, steps)):
+        nxt = set()
+        for idx in frontier:
+            y = idx // res
+            x = idx % res
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dy == 0 and dx == 0:
+                        continue
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < res and 0 <= nx < res:
+                        nidx = ny * res + nx
+                        if nidx not in s and lo <= height[nidx] <= hi:
+                            s.add(nidx)
+                            nxt.add(nidx)
+        frontier = nxt
+        if not frontier:
+            break
+    return s
+
+
 _N8 = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 
 
@@ -462,11 +497,14 @@ def main(argv):
     depth_eps = 0.5           # cell counts as standing water past this depth
     min_depth = 3.0           # a body's DEEPEST cell must clear this (drop shallow noise)
     level_tol = 0.6           # connect cells only within this spill step (split merged pits)
-    open_frac = 0.12          # reject a basin if more than this fraction of its rim is
-    rim_open_min = 3          # below water level (would spill); always allow a small pour
+    open_frac = 0.08          # reject a basin if more than this fraction of its rim is
+    rim_open_min = 2          # below water level (would spill); always allow a small pour
     rim_eps = 0.4             # how far below level a rim cell must be to count as "open"
+    shore_rise = 2.0          # mask tucks under shore cells up to this far ABOVE level (m)
+    shore_drop = 1.0          # ...and no further than this BELOW it, so it can't cross a
+                              # ridge into lower ground on the far side (the overflow bug)
     lake_above_sea = 1.0
-    shore_dilate = 2
+    shore_dilate = 2          # max cells the (terrain-aware) shore tuck-under may grow
     river_threshold = 650      # upstream cells before a flow line is a river (higher than
                                # before: 220 painted the whole drainage net as pebble lines)
     river_min_points = 10      # drop short stub channels (render + pebble)
@@ -474,9 +512,9 @@ def main(argv):
     river_max_w = 26.0
     river_lift = 0.3           # raise the ribbon this far above the terrain sample
     paint_cm = False
-    pebble_band = 3            # lake pebble shore (cells); needs > shore_dilate to clear
-                              # the water plane's own overhang and stay visible on land
-    river_band = 1            # pebble bank on each side of a river channel (cells)
+    pebble_band = 4            # pebble shore width (cells) OUTSIDE the rendered water edge,
+                              # so it forms a visible band around the water, not under it
+    river_band = 2            # pebble bank on each side of a river channel (cells)
     pebble_layer = 21          # control-map layer index to stamp (21 = pebble_field)
     chunks_dir = "terrain/chunks"
     manifest_path = "terrain/terrain_manifest.json"
@@ -494,6 +532,8 @@ def main(argv):
         elif t == "--level-tol": i += 1; level_tol = float(a[i])
         elif t == "--open-frac": i += 1; open_frac = float(a[i])
         elif t == "--shore-dilate": i += 1; shore_dilate = int(a[i])
+        elif t == "--shore-rise": i += 1; shore_rise = float(a[i])
+        elif t == "--shore-drop": i += 1; shore_drop = float(a[i])
         elif t == "--river-threshold": i += 1; river_threshold = int(a[i])
         elif t == "--river-min-points": i += 1; river_min_points = int(a[i])
         elif t == "--paint-control-map": paint_cm = True
@@ -562,11 +602,15 @@ def main(argv):
         return half - gy / (res - 1) * world
 
     bodies = []
+    water_footprint = set()   # union of every lake's rendered mask cells (for pebble shores)
     for li, (cells, level) in enumerate(lakes):
         # level is the basin's contained pour-point elevation (see
-        # basin_level_and_containment); the rendered/queried mask is dilated so the water
-        # runs up into the shore and sits flush (no rim gap).
-        mask_cells = dilate(cells, res, shore_dilate)
+        # basin_level_and_containment); the rendered/queried mask tucks under the shore so
+        # the plane sits flush (no rim gap) — but ONLY into the shore band around the water
+        # level, so it can't cross a ridge/lip onto lower ground and poke out the far side.
+        mask_cells = shore_band_dilate(cells, height, res, level, shore_dilate,
+                                       shore_rise, shore_drop)
+        water_footprint.update(mask_cells)
         xs = [c % res for c in mask_cells]
         ys = [c // res for c in mask_cells]
         min_gx, max_gx = min(xs), max(xs)
@@ -599,9 +643,10 @@ def main(argv):
         "sea_level": sea_level,
         "shore_dilate_cells": shore_dilate,
         "uv_mapping": ("u=(world_x+%g)/%g (east+); lake mask v=(max_z-world_z)/(max_z-min_z) "
-                       "so mask row 0 = south(+Z), matching the control map. Mask is dilated "
-                       "%d cell(s) past the waterline so the plane tucks under the shore."
-                       % (half, world, shore_dilate)),
+                       "so mask row 0 = south(+Z), matching the control map. Mask tucks up to "
+                       "%d cell(s) under the shore but ONLY into the shore band around the "
+                       "water level (terrain-aware), so it can't cross a ridge onto lower "
+                       "ground and poke out the far side." % (half, world, shore_dilate)),
         "note": ("Sea/ocean is drawn at runtime as one plane at y=sea_level (land occludes it); "
                  "only inland lakes are listed here. Rivers are polylines of [x,y,z,width] the "
                  "runtime renders as ribbons. Re-run tools/build_water_bodies.py after "
@@ -614,15 +659,16 @@ def main(argv):
         out_path, len(bodies), len(river_bodies), len(bodies), masks_dir))
 
     if paint_cm:
-        # Pebble = the visible shore of the KEPT lakes and the RENDERED rivers only (the
-        # ocean coast already reads as sand). Lakes get a ring a little wider than the
-        # water plane's overhang (shore_dilate); rivers get a thin bank along the actual
-        # channels we kept — NOT the whole D8 accumulation field, which previously painted
-        # arbitrary pebble lines across the map. Drop lake interiors and sea so only the
-        # visible shore/bank lands on the control map.
-        pebble_cells = (dilate(lake_set, res, pebble_band)
-                        | dilate(rendered_rivers, res, river_band))
-        pebble_cells = pebble_cells - lake_set - sea_set
+        # Pebble = a VISIBLE band of shore around the water, plus river banks. The previous
+        # version painted from the true waterline outward, so the water plane (which tucks
+        # ~shore_dilate cells under the shore) covered almost all of it and no pebble showed.
+        # Now the lake band is grown from the RENDERED water footprint (mask), so the whole
+        # pebble_band lands OUTSIDE the water plane and reads as a shore. Rivers get a bank
+        # on each side of the kept channels (not the whole D8 net). Subtract the water and
+        # sea so pebble only paints the dry/visible shore + the very shallow waterline bed.
+        lake_shore = dilate(water_footprint, res, pebble_band) - water_footprint
+        river_banks = dilate(rendered_rivers, res, river_band)
+        pebble_cells = (lake_shore | river_banks) - lake_set - sea_set
         print("Painting pebble layer %d into %s over %d shore/bed cell(s)..." % (
             pebble_layer, control_path, len(pebble_cells)))
         n = paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer)
