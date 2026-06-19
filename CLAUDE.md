@@ -139,3 +139,50 @@ available mid-session if `.mcp.json` changed during it.
 - Texture import settings matter: normal maps → **Normal Map** mode; AO / height
   / roughness → **Non-Color**; albedo → sRGB. Godot uses **OpenGL (+Y) normals**
   (Blender's default bake).
+
+### Terrain streaming & chunk meshes (`terrain/TerrainStreamer.gd`)
+- **`load_radius` is per-axis.** The loaded set is `(2*load_radius+1)^2` chunks,
+  so radius 6 = **169** chunks, not ~36. With the scene's fog hiding the far
+  edge, radius 4 (81) is plenty. Stream nearest-first and cap loads in flight.
+- **Do NOT create/rebuild meshes or collision shapes at runtime while the world
+  is rendering.** Rebuilding an `ArrayMesh` (`add_surface_from_arrays`) or baking
+  `create_trimesh_shape()` per chunk as new chunks stream in **crashed the engine
+  hard** on the user's RTX 3060 / Vulkan (Forward+) — instantly when flying into
+  unvisited terrain. It crashes on the **main thread** *and* on a
+  `WorkerThreadPool` thread (creating RenderingServer/PhysicsServer resources off
+  the main thread is unsafe here). Treat runtime mesh/shape creation as off-limits
+  for streaming; do that work **offline / at import** instead.
+- **The skirt-normal "grid of seams" fix is baked into the GLBs, not done at
+  runtime.** Chunks have a 25 m vertical skirt whose top ring shares the surface's
+  outer verts, so the exporter averages skirt + top normals and darkens every
+  chunk edge into a grid. `tools/bake_chunk_normals.py` recomputes each chunk's
+  `NORMAL` attribute in-place in the `.glb` (excluding near-vertical skirt faces;
+  surgical edit — only normal bytes change, size/JSON identical). `TerrainStreamer.
+  fix_edge_normals` defaults **false** (the assets are already correct).
+- **Re-run `tools/bake_chunk_normals.py` whenever the terrain chunks are
+  re-exported from Blender** (`python3 tools/bake_chunk_normals.py terrain/chunks`).
+  Re-export overwrites the baked normals, so the seam grid will come back until
+  you re-bake. This generalises: any **derived/baked asset fix must be re-applied
+  after the source asset is regenerated** — keep the baker committed and idempotent
+  so it's a one-liner.
+- glTF/Godot share the orientation that matters here (Y-up), so a normal's `.y`
+  means the same thing in the raw `.glb` and in-engine — the offline baker and the
+  old runtime fix compute identical results.
+
+### Debugging discipline (learned the hard way this session)
+- **Add comprehensive, granular instrumentation EARLY — before guessing at
+  fixes.** This session burned several iterations on plausible-but-wrong fixes
+  (throttling, then moving work to a worker thread) because the logging was too
+  coarse to localise the fault. The crash was only pinned down once the debug
+  output (a) **timed each suspect phase separately** (`fix=…ms coll=…ms`) and
+  (b) **exposed live pipeline state** (`loaded/pending/building` counts). The
+  counts revealed the worker tasks were dying (never draining); the per-phase
+  timing + a user A/B of the toggle proved it was the mesh rebuild, not collision
+  or the shader.
+- **Instrument the specific operation you suspect, and make each suspect
+  independently toggleable** (here: `fix_edge_normals`, `add_collision`,
+  `enable_parallax`, `enable_triplanar` as exports). When you can't run the engine
+  yourself, cheap toggles + a per-phase debug print let the user bisect a crash in
+  one run instead of many round-trips. Reach for this on the *first* sign of a
+  fault you can't see directly, not the third.
+
