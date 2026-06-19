@@ -35,10 +35,11 @@ extends Node3D
 ## Build a trimesh StaticBody under each chunk on load (runtime collision).
 @export var add_collision: bool = true
 ## Recompute each chunk's surface normals at load, excluding the near-vertical
-## skirt faces that otherwise tilt the edge-row normals and draw a dark grid along
-## every chunk seam. Leave on unless the source meshes already have split skirt
-## normals. (Toggle off to test whether the mesh rebuild is implicated in a crash.)
-@export var fix_edge_normals: bool = true
+## skirt faces that draw a dark grid along chunk seams. LEFT OFF by default: doing
+## this at runtime rebuilds an ArrayMesh per chunk, which crashes some drivers when
+## new chunks build during flight. Bake it into the GLBs instead with
+## tools/bake_chunk_normals.py (then leave this off). Only turn on to A/B test.
+@export var fix_edge_normals: bool = false
 ## Faces flatter than this |normal.y| are treated as skirt walls and excluded from
 ## edge-vertex normals. 0 = vertical wall, 1 = flat ground; ~0.15 keeps real cliffs
 ## while dropping the 25 m skirts.
