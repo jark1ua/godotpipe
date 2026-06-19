@@ -203,6 +203,26 @@ def find_lakes(height, spill, res, sea_level, depth_eps, lake_above_sea, min_are
     return lakes
 
 
+def dilate(cells, res, n):
+    """Grow a set of cell indices outward by n cells (8-connected). Used to run the
+    lake surface a little way UP INTO the surrounding terrain, so the flat water plane
+    tucks under the rising shore and reads flush instead of leaving a gap at the rim
+    (the same reason the sea looks flush: its plane runs under the land)."""
+    s = set(cells)
+    for _ in range(max(0, n)):
+        add = []
+        for idx in s:
+            y = idx // res
+            x = idx % res
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < res and 0 <= nx < res:
+                        add.append(ny * res + nx)
+        s.update(add)
+    return s
+
+
 def write_gray_png(path, w, h, rows):
     def chunk(typ, data):
         return (struct.pack(">I", len(data)) + typ + data
@@ -224,6 +244,7 @@ def main(argv):
     min_area = 8
     depth_eps = 0.5
     lake_above_sea = 1.0
+    shore_dilate = 2
     chunks_dir = "terrain/chunks"
     manifest_path = "terrain/terrain_manifest.json"
     out_path = "terrain/water_bodies.json"
@@ -235,6 +256,7 @@ def main(argv):
         if t == "--res": i += 1; res = int(a[i])
         elif t == "--sea": i += 1; sea_level = float(a[i])
         elif t == "--min-area": i += 1; min_area = int(a[i])
+        elif t == "--shore-dilate": i += 1; shore_dilate = int(a[i])
         elif t == "--chunks": i += 1; chunks_dir = a[i]
         elif t == "--manifest": i += 1; manifest_path = a[i]
         elif t == "--out": i += 1; out_path = a[i]
@@ -271,15 +293,18 @@ def main(argv):
 
     bodies = []
     for li, cells in enumerate(lakes):
-        xs = [c % res for c in cells]
-        ys = [c // res for c in cells]
+        level = max(spill[c] for c in cells)
+        # The surface level comes from the true water cells; the rendered/queried mask
+        # is dilated so the water runs up into the shore and sits flush (no rim gap).
+        mask_cells = dilate(cells, res, shore_dilate)
+        xs = [c % res for c in mask_cells]
+        ys = [c // res for c in mask_cells]
         min_gx, max_gx = min(xs), max(xs)
         min_gy, max_gy = min(ys), max(ys)
-        level = max(spill[c] for c in cells)
         mw = max_gx - min_gx + 1
         mh = max_gy - min_gy + 1
         rows = [bytearray(mw) for _ in range(mh)]
-        for c in cells:
+        for c in mask_cells:
             rows[(c // res) - min_gy][(c % res) - min_gx] = 255
         mask_name = "lake_%03d.png" % li
         write_gray_png(os.path.join(masks_dir, mask_name), mw, mh, rows)
@@ -300,8 +325,11 @@ def main(argv):
         "grid_res": res,
         "cell_size_m": round(cell_m, 4),
         "sea_level": sea_level,
+        "shore_dilate_cells": shore_dilate,
         "uv_mapping": ("u=(world_x+%g)/%g (east+); lake mask v=(max_z-world_z)/(max_z-min_z) "
-                       "so mask row 0 = south(+Z), matching the control map." % (half, world)),
+                       "so mask row 0 = south(+Z), matching the control map. Mask is dilated "
+                       "%d cell(s) past the waterline so the plane tucks under the shore."
+                       % (half, world, shore_dilate)),
         "note": ("Sea/ocean is drawn at runtime as one plane at y=sea_level (land occludes it); "
                  "only inland lakes are listed here. Re-run tools/build_water_bodies.py after "
                  "re-exporting the terrain chunks."),

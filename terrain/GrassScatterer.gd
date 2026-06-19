@@ -90,6 +90,12 @@ extends Node3D
 ## Skip ground steeper than this (degrees) — grass doesn't cling to cliffs. Also
 ## guards against the control map reading grass on a steep face.
 @export_range(0.0, 90.0) var max_slope_deg: float = 40.0
+## Don't spawn grass on ground that sits below the water surface (sea or lake). Reads
+## the WaterMap autoload; no-op if it isn't present.
+@export var avoid_water: bool = true
+## Treat ground within this many metres of the water surface as submerged too, so the
+## turf stops a touch before the waterline instead of poking through the shallows.
+@export var water_margin: float = 0.15
 @export var min_scale: float = 0.7
 @export var max_scale: float = 1.4
 ## Sink the base this many metres into the ground so blades don't hover on bumps.
@@ -133,6 +139,7 @@ var _active: Dictionary = {}      # "i_j" -> MultiMeshInstance3D (scattered)
 var _pool: Array[MultiMeshInstance3D] = []
 var _preview: Dictionary = {}     # editor-only, not saved
 var _placeholder: Mesh = null
+var _water: Node = null            # WaterMap autoload, for the under-water gate
 var _pi: int = 0
 var _pj: int = 0
 
@@ -148,6 +155,8 @@ func _ready() -> void:
 		_player = get_viewport().get_camera_3d()
 		if _player != null:
 			push_warning("GrassScatterer: player_path unresolved; falling back to active Camera3D.")
+	if avoid_water:
+		_water = get_node_or_null("/root/WaterMap")
 	print("GrassScatterer ready: %d grass layers, control map %dx%d, player=%s" % [
 		_grass_layers.size(), _cm_w, _cm_h, _player.name if _player != null else "<none>"])
 
@@ -228,6 +237,9 @@ func _scatter_chunk(key: String, mesh: Mesh) -> bool:
 		if nrm.y < cos_max:
 			continue   # too steep for grass
 		var pos: Vector3 = hit["position"]
+		# Skip ground that sits under the water surface (sea or lake).
+		if _water != null and _water.is_submerged(pos, water_margin):
+			continue
 		pos.y -= ground_sink
 		var yaw := rng.randf() * TAU
 		var scl := rng.randf_range(min_scale, max_scale)
