@@ -32,6 +32,15 @@ extends Node3D
 @export var keep_radius: int = 8
 ## Build a trimesh StaticBody under each chunk on load (runtime collision).
 @export var add_collision: bool = true
+## Recompute each chunk's surface normals at load, excluding the near-vertical
+## skirt faces that otherwise tilt the edge-row normals and draw a dark grid along
+## every chunk seam. Leave on unless the source meshes already have split skirt
+## normals. See _fix_chunk_normals.
+@export var fix_edge_normals: bool = true
+## Faces flatter than this |normal.y| are treated as skirt walls and excluded from
+## edge-vertex normals. 0 = vertical wall, 1 = flat ground; ~0.15 keeps real cliffs
+## while dropping the 25 m skirts.
+@export var skirt_normal_y_max: float = 0.15
 ## Optional override: assign a ShaderMaterial to use it verbatim. Leave null and
 ## the streamer builds the control-map material at runtime from the settings below.
 @export var terrain_material: Material
@@ -75,6 +84,7 @@ var _accum: float = 0.0
 var _logged_first: bool = false
 var _mesh_count: int = 0
 var _material: ShaderMaterial = null   # built once, shared by every chunk
+var _fixed_meshes: Dictionary = {}     # mesh RID -> true; fix each shared mesh once
 
 func _ready() -> void:
 	_load_manifest()
@@ -186,6 +196,8 @@ func _setup_meshes(node: Node, with_collision: bool) -> void:
 		if child is MeshInstance3D:
 			var mi := child as MeshInstance3D
 			_mesh_count += 1
+			if fix_edge_normals:
+				_fix_chunk_normals(mi)
 			if mat != null:
 				mi.material_override = mat
 			if with_collision and mi.mesh != null:
@@ -195,6 +207,93 @@ func _setup_meshes(node: Node, with_collision: bool) -> void:
 				body.add_child(cs)
 				mi.add_child(body)
 		_setup_meshes(child, with_collision)
+
+# ---- Edge-normal repair (kills the dark grid along chunk seams) ---------------
+#
+# Each chunk carries a 25 m vertical skirt around its rim to hide cracks. The top
+# ring of skirt verts is shared with the surface's outer ring, so the exporter's
+# normal averaging blends the (near-flat) surface normal with the (horizontal)
+# skirt-wall normal — tilting the whole edge row outward and shading it darker.
+# Across all chunks that paints a grid of shadow lines on the seams.
+#
+# Fix: recompute vertex normals from the surface faces only, excluding faces that
+# are nearly vertical (the skirt). Edge-top verts then take their normal from the
+# flat top alone and match across chunks, so the grid disappears. The skirts stay
+# (they still hide cracks); only the contaminated normals change. The chunk mesh
+# is a shared sub-resource, so each is fixed once and the change covers every
+# instance of that chunk.
+func _fix_chunk_normals(mi: MeshInstance3D) -> void:
+	var mesh := mi.mesh as ArrayMesh
+	if mesh == null:
+		return
+	var rid := mesh.get_rid()
+	if _fixed_meshes.has(rid):
+		return
+	_fixed_meshes[rid] = true
+	# Bail unless every surface is plain triangles — we rebuild from arrays and
+	# don't want to silently drop strips/points or per-surface materials we can't
+	# re-attach. Terrain chunks are triangle soup, so this normally passes.
+	for s in range(mesh.get_surface_count()):
+		if mesh.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
+			return
+	var fixed_arrays: Array = []
+	var any := false
+	for s in range(mesh.get_surface_count()):
+		var arrays: Array = mesh.surface_get_arrays(s)
+		if _recompute_surface_normals(arrays):
+			any = true
+		fixed_arrays.append(arrays)
+	if not any:
+		return
+	mesh.clear_surfaces()
+	for arrays in fixed_arrays:
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+
+# Recompute ARRAY_NORMAL in-place from the triangle faces, skipping near-vertical
+# (skirt) faces. Returns true if normals were written.
+func _recompute_surface_normals(arrays: Array) -> bool:
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if verts.is_empty():
+		return false
+	# Unused slots come back as null; coerce to empty packed arrays so the typed
+	# locals below never see a null (non-indexed meshes have no ARRAY_INDEX).
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL] if arrays[Mesh.ARRAY_NORMAL] != null else PackedVector3Array()
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+	var n := verts.size()
+	var accum := PackedVector3Array()
+	accum.resize(n)  # PackedVector3Array initialises to zero vectors
+	var tri := (indices.size() / 3) if indices.size() > 0 else (n / 3)
+	for t in range(tri):
+		var a: int
+		var b: int
+		var c: int
+		if indices.size() > 0:
+			a = indices[t * 3]; b = indices[t * 3 + 1]; c = indices[t * 3 + 2]
+		else:
+			a = t * 3; b = t * 3 + 1; c = t * 3 + 2
+		var fn := (verts[b] - verts[a]).cross(verts[c] - verts[a])
+		var l := fn.length()
+		if l < 1e-12:
+			continue
+		fn /= l
+		# Match the exporter's winding so accumulated normals point the right way.
+		if not normals.is_empty() and (normals[a] + normals[b] + normals[c]).dot(fn) < 0.0:
+			fn = -fn
+		# Drop the vertical skirt walls so they can't tilt the edge-row normals.
+		if absf(fn.y) < skirt_normal_y_max:
+			continue
+		accum[a] += fn
+		accum[b] += fn
+		accum[c] += fn
+	if normals.is_empty():
+		normals = PackedVector3Array()
+		normals.resize(n)
+	for i in range(n):
+		# Skirt-only verts get no contribution; keep their original normal (hidden).
+		if accum[i].length_squared() > 1e-12:
+			normals[i] = accum[i].normalized()
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	return true
 
 # ---- Editor-only preview (no streaming, no save) -----------------------------
 

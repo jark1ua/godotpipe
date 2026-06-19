@@ -41,12 +41,18 @@ uniform float triplanar_slope_full  : hint_range(0.0, 1.0) = 0.75;
 uniform float triplanar_sharpness   : hint_range(1.0, 16.0) = 4.0;
 uniform float normal_strength       : hint_range(0.0, 2.0) = 1.0;
 
-// Parallax (apparent depth from the height maps). Cheap offset mapping: shifts the
-// detail UV along the view direction by the layer's height, so textures look like
-// they have relief at grazing angles. Applied to the planar (flat) sample only.
+// Parallax Occlusion Mapping (real ray-marched relief from the height maps).
+// Marches the base layer's height field along the tangent-space view direction,
+// finds the occluded intersection, and shifts the detail UV there — so the ground
+// shows true depth and parallax at grazing angles, not just a single-tap skew.
+// Applied to near-flat ground only (skipped on steep/triplanar faces, where the
+// world-XZ UV plane is invalid). The control map is always sampled at the
+// un-parallaxed UV, so POM never changes which layer lives where.
 uniform bool enable_parallax = true;
-uniform float parallax_scale : hint_range(0.0, 2.0) = 0.4;     // metres of apparent depth
+uniform float parallax_scale : hint_range(0.0, 0.5) = 0.08;    // apparent depth, fraction of a tile
 uniform float parallax_min_view : hint_range(0.05, 1.0) = 0.3; // clamp at grazing angles
+uniform int parallax_min_steps : hint_range(2, 32) = 8;        // march steps looking straight down
+uniform int parallax_max_steps : hint_range(4, 64) = 32;       // march steps at grazing angles
 
 varying vec3 v_world_pos;
 varying vec3 v_world_normal;
@@ -96,6 +102,40 @@ float height_blend_weight(float base_h, float over_h, float t) {
 	return w2 / max(w1 + w2, 1e-5);
 }
 
+// Parallax Occlusion Mapping. Marches a layer's height field along the tangent-
+// space view direction and returns the detail-UV offset (in tile/UV units) at the
+// occluded hit. view_ts = view dir (surface->camera) in the flat-ground tangent
+// frame (x = +X tangent, y = +Z bitangent, z = +Y normal); fl is the layer slice.
+vec2 pom_offset(vec2 base_uv, vec3 view_ts, float fl) {
+	float ndotv = max(view_ts.z, parallax_min_view);
+	// More steps at grazing angles (view_ts.z small), fewer looking straight down.
+	float n_steps = mix(float(parallax_max_steps), float(parallax_min_steps),
+			clamp(view_ts.z, 0.0, 1.0));
+	float layer_depth = 1.0 / n_steps;
+	// Total UV shift corresponding to the full apparent depth.
+	vec2 P = (view_ts.xy / ndotv) * parallax_scale;
+	vec2 delta_uv = P / n_steps;
+
+	// textureLod (explicit LOD 0): derivatives are undefined inside this divergent
+	// loop, so a plain texture() would be ill-defined. LOD 0 height is fine to march.
+	float cur_depth = 0.0;
+	vec2 cur_uv = base_uv;
+	float surf_depth = 1.0 - textureLod(height_array, vec3(cur_uv, fl), 0.0).r;
+	for (int i = 0; i < 64; i++) {
+		if (float(i) >= n_steps || cur_depth >= surf_depth) break;
+		cur_uv -= delta_uv;
+		cur_depth += layer_depth;
+		surf_depth = 1.0 - textureLod(height_array, vec3(cur_uv, fl), 0.0).r;
+	}
+	// Refine: interpolate between the last two samples around the crossing.
+	vec2 prev_uv = cur_uv + delta_uv;
+	float after = surf_depth - cur_depth;
+	float before = (1.0 - textureLod(height_array, vec3(prev_uv, fl), 0.0).r) - (cur_depth - layer_depth);
+	float w = after / max(after - before, 1e-5);
+	vec2 hit_uv = mix(cur_uv, prev_uv, clamp(w, 0.0, 1.0));
+	return hit_uv - base_uv;
+}
+
 void fragment() {
 	// Unpack the control map at the world UV (0..1 across the whole terrain).
 	uint packed = uint(texture(control_map, UV).r * 65535.0 + 0.5);
@@ -110,13 +150,20 @@ void fragment() {
 	vec3 tri_w = pow(abs(wn), vec3(triplanar_sharpness));
 	tri_w /= max(tri_w.x + tri_w.y + tri_w.z, 1e-5);
 
-	// Parallax offset (world XZ metres) from the base layer's height at this texel.
+	// Parallax Occlusion Mapping offset (world XZ metres) from the base layer's
+	// height field. Skipped on steep/triplanar faces (the world-XZ UV plane is
+	// invalid there) and faded out as the slope ramps into triplanar.
 	vec2 world_off = vec2(0.0);
-	if (enable_parallax) {
+	if (enable_parallax && tri_amt < 0.999) {
 		vec3 wv = normalize(CAMERA_POSITION_WORLD - v_world_pos);
+		// Flat-ground tangent frame: T=+X, B=+Z, N=+Y -> view dir in tangent space.
+		vec3 view_ts = vec3(wv.x, wv.z, wv.y);
 		float btile = layer_tile_m[base_l] > 0.0 ? layer_tile_m[base_l] : default_tile_m;
-		float h0 = texture(height_array, vec3(v_world_pos.xz / btile, float(base_l))).r;
-		world_off = (wv.xz / max(wv.y, parallax_min_view)) * (h0 - 0.5) * parallax_scale;
+		vec2 base_uv = v_world_pos.xz / btile;
+		vec2 uv_off = pom_offset(base_uv, view_ts, float(base_l));
+		// UV offset (base-layer tiles) -> physical metres on the ground, so each
+		// layer re-derives its own UV shift from its own tile size in sample_layer.
+		world_off = uv_off * btile * (1.0 - tri_amt);
 	}
 
 	vec3 ba, bn; float bao, brough, bh;
