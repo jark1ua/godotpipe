@@ -21,3 +21,5 @@ obj/
 # --- OS / editor junk ---
 .DS_Store
 *~
+__pycache__/
+*.pyc
