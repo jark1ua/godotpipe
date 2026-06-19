@@ -41,6 +41,13 @@ uniform float triplanar_slope_full  : hint_range(0.0, 1.0) = 0.75;
 uniform float triplanar_sharpness   : hint_range(1.0, 16.0) = 4.0;
 uniform float normal_strength       : hint_range(0.0, 2.0) = 1.0;
 
+// Parallax (apparent depth from the height maps). Cheap offset mapping: shifts the
+// detail UV along the view direction by the layer's height, so textures look like
+// they have relief at grazing angles. Applied to the planar (flat) sample only.
+uniform bool enable_parallax = true;
+uniform float parallax_scale : hint_range(0.0, 2.0) = 0.4;     // metres of apparent depth
+uniform float parallax_min_view : hint_range(0.05, 1.0) = 0.3; // clamp at grazing angles
+
 varying vec3 v_world_pos;
 varying vec3 v_world_normal;
 
@@ -51,10 +58,11 @@ void vertex() {
 
 // Sample one layer's maps at this fragment. Albedo + normal get triplanar on
 // steep eligible layers; ao/rough/height stay planar (cheaper, barely visible).
-void sample_layer(int layer, float tri_amt, vec3 tri_w,
+// world_off is a parallax shift (metres, world XZ) applied to the planar sample.
+void sample_layer(int layer, vec2 world_off, float tri_amt, vec3 tri_w,
 		out vec3 albedo, out vec3 nrm, out float ao, out float rough, out float height) {
 	float tile = layer_tile_m[layer] > 0.0 ? layer_tile_m[layer] : default_tile_m;
-	vec2 puv = v_world_pos.xz / tile;
+	vec2 puv = (v_world_pos.xz + world_off) / tile;
 	float fl = float(layer);
 
 	albedo = texture(albedo_array, vec3(puv, fl)).rgb;
@@ -102,10 +110,19 @@ void fragment() {
 	vec3 tri_w = pow(abs(wn), vec3(triplanar_sharpness));
 	tri_w /= max(tri_w.x + tri_w.y + tri_w.z, 1e-5);
 
+	// Parallax offset (world XZ metres) from the base layer's height at this texel.
+	vec2 world_off = vec2(0.0);
+	if (enable_parallax) {
+		vec3 wv = normalize(CAMERA_POSITION_WORLD - v_world_pos);
+		float btile = layer_tile_m[base_l] > 0.0 ? layer_tile_m[base_l] : default_tile_m;
+		float h0 = texture(height_array, vec3(v_world_pos.xz / btile, float(base_l))).r;
+		world_off = (wv.xz / max(wv.y, parallax_min_view)) * (h0 - 0.5) * parallax_scale;
+	}
+
 	vec3 ba, bn; float bao, brough, bh;
 	vec3 oa, on; float oao, orough, oh;
-	sample_layer(base_l, tri_amt, tri_w, ba, bn, bao, brough, bh);
-	sample_layer(over_l, tri_amt, tri_w, oa, on, oao, orough, oh);
+	sample_layer(base_l, world_off, tri_amt, tri_w, ba, bn, bao, brough, bh);
+	sample_layer(over_l, world_off, tri_amt, tri_w, oa, on, oao, orough, oh);
 
 	float hbw = height_blend_weight(bh, oh, blend);
 	float final_blend = mix(blend, hbw, height_blend_influence);

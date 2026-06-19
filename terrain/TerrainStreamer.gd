@@ -44,9 +44,13 @@ extends Node3D
 ## 16-bit single-channel control map: base(5) | overlay(5) | blend(5) per texel.
 @export_file var control_map_path: String = "res://terrain/terrain_control_map.png"
 ## Folder of base PBR sets: <sets_dir>/<set>/{albedo,normal,height,ao,rough}.png.
-## Each of the 32 layers samples the set named by its manifest "texture_set".
-## REPLACE these placeholder PNGs with your baked maps (keep the names/paths).
+## Used as the fallback for any layer that has no dedicated textures yet.
 @export_dir var sets_dir: String = "res://terrain/arrays/sets"
+## Folder of per-layer PBR sets: <layers_dir>/<NN_name>/{albedo,normal,height,ao,rough}.png
+## (NN_name = zero-padded index + manifest name, e.g. "00_rock_cold_granite").
+## Drop dedicated maps here to override the base set for that one layer; any map
+## you leave out falls back to the layer's base set. See arrays/layers/README.md.
+@export_dir var layers_dir: String = "res://terrain/arrays/layers"
 ## Fallback tile size (metres) for any layer missing tile_meters in the manifest.
 @export var default_tile_m: float = 12.0
 
@@ -259,7 +263,8 @@ func _build_terrain_material() -> ShaderMaterial:
 	for i in range(32):
 		var li: Dictionary = layers[i] if i < n else {}
 		var setname := String(li.get("texture_set", "grass"))
-		var maps := _get_set_images(setname, set_cache)
+		var lname := String(li.get("name", "layer_%d" % i))
+		var maps := _get_layer_images(i, lname, setname, set_cache)
 		for m in _MAPS:
 			imgs[m].append(maps[m])
 		tiles[i] = float(li.get("tile_meters", default_tile_m))
@@ -290,6 +295,22 @@ func _read_layers() -> Array:
 		return []
 	var data: Dictionary = JSON.parse_string(f.get_as_text())
 	return data.get("layers", [])
+
+# Per-layer textures override the base set, per map. Missing maps fall back to
+# the layer's base set; missing sets fall back to a solid colour.
+func _get_layer_images(idx: int, lname: String, setname: String, set_cache: Dictionary) -> Dictionary:
+	var ldir := layers_dir.path_join("%02d_%s" % [idx, lname])
+	var maps: Dictionary = {}
+	var set_maps: Dictionary = {}
+	for m in _MAPS:
+		var p := ldir.path_join(m + ".png")
+		if ResourceLoader.exists(p):
+			maps[m] = _load_or_make(p, Color(0.5, 0.5, 0.5))
+		else:
+			if set_maps.is_empty():
+				set_maps = _get_set_images(setname, set_cache)
+			maps[m] = set_maps[m]
+	return maps
 
 func _get_set_images(setname: String, cache: Dictionary) -> Dictionary:
 	if cache.has(setname):
@@ -354,10 +375,33 @@ func _load_control_map_texture() -> Texture2D:
 			return null
 	if img.get_format() != Image.FORMAT_RF:
 		img.convert(Image.FORMAT_RF)
-	# Sanity-check precision: decode the centre texel and report it.
-	var cx := img.get_width() / 2
-	var cy := img.get_height() / 2
-	var v := int(round(img.get_pixel(cx, cy).r * 65535.0))
-	print("TerrainStreamer: control map %dx%d, centre texel V=%d -> base=%d overlay=%d blend_raw=%d" % [
-		img.get_width(), img.get_height(), v, v & 31, (v >> 5) & 31, (v >> 10) & 31])
+	_report_control_map_precision(img)
 	return ImageTexture.create_from_image(img)
+
+# Scan a grid of texels to tell whether the control map kept its 16 bits. If it
+# was truncated to 8-bit, EVERY value would be a multiple of 256 (low byte == 0),
+# which would zero out the base layer everywhere — so a nonzero low byte anywhere
+# proves the packing survived.
+func _report_control_map_precision(img: Image) -> void:
+	var w := img.get_width()
+	var h := img.get_height()
+	var step := maxi(1, w / 64)
+	var low_byte_nonzero := 0
+	var any_overlay := 0
+	var any_blend := 0
+	var bases := {}
+	var samples := 0
+	for y in range(0, h, step):
+		for x in range(0, w, step):
+			var v := int(round(img.get_pixel(x, y).r * 65535.0))
+			samples += 1
+			if (v & 0xFF) != 0:
+				low_byte_nonzero += 1
+			if ((v >> 5) & 31) != 0:
+				any_overlay += 1
+			if ((v >> 10) & 31) != 0:
+				any_blend += 1
+			bases[v & 31] = true
+	var verdict := "16-bit OK" if low_byte_nonzero > 0 else "LOOKS 8-BIT TRUNCATED (re-export as EXR)"
+	print("TerrainStreamer: control map %dx%d — %s. %d/%d texels with nonzero low byte; %d distinct base layers; overlay used in %d, blend in %d." % [
+		w, h, verdict, low_byte_nonzero, samples, bases.size(), any_overlay, any_blend])
