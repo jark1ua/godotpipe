@@ -1,4 +1,4 @@
-r@tool
+@tool
 extends Node3D
 ## Streams Blender-exported terrain chunks around a player.
 ## Reads terrain_manifest.json and loads/frees Chunk_II_JJ.glb by distance.
