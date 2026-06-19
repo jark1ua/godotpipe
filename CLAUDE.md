@@ -186,3 +186,104 @@ available mid-session if `.mcp.json` changed during it.
   one run instead of many round-trips. Reach for this on the *first* sign of a
   fault you can't see directly, not the third.
 
+### Terrain texturing: the 32-layer control map (NOT the old 4-channel splatmap)
+- The terrain is no longer painted by `terrain_splatmap.png` (R=grass/G=rock/B=snow/
+  A=sand). That is superseded by a **32-layer control map**: `terrain/
+  terrain_control_map.exr` (2048², 16-bit-equivalent FLOAT) packs **per texel** a
+  base layer | overlay layer | blend, 5+5+5 bits: `V=round(R*65535)`,
+  `base=V&31`, `overlay=(V>>5)&31`, `blend=((V>>10)&31)/31*0.5`. `shaders/
+  terrain_splat.gdshader` samples it (NEAREST, no sRGB/mipmaps) and
+  `TerrainStreamer.gd` builds the per-layer `Texture2DArray`s at runtime.
+- Each layer has a **`group`** in `terrain/control_map_layers.json`
+  (grass/rock/snow/sand/forest/gravel/wet/special). Select terrain "of a type" by
+  group, not by channel. Grass = indices 5–9; pebble = `pebble_field` (21).
+- **UV/orientation convention shared by control map, splatmap and water masks:**
+  `u=(world_x+3000)/6000` (east+), `v=(3000−world_z)/6000`, image **row 0 = south
+  (+Z)**. Chunk index: `j=round(x/step)+center`, `i=round(−z/step)+center`
+  (`step≈193.55`, `center=15`, world 6000²). Reuse this everywhere — getting `v`
+  flipped silently mirrors your data north/south.
+- A layer's textures live in `terrain/arrays/layers/<NN_name>/{albedo,normal,height,
+  ao,rough}.png`, falling back to `arrays/sets/<group>/`. Many layers (incl. 21
+  pebble_field) are **placeholders pointing at another set** until you bake real
+  PBR — so a freshly-assigned layer may *look* like rock/grass until its textures
+  are dropped in.
+
+### Editing the control-map EXR in pure Python (`tools/exr_control_map.py`)
+- The env has **no numpy / OpenEXR / PIL**, and the control map is a **ZIP
+  scanline EXR** (3× FLOAT B,G,R; only R carries data). `tools/exr_control_map.py`
+  reads/patches/writes it by hand: per 16-scanline block, `zlib` inflate then undo
+  EXR's **predictor (delta) + de-interleave**; on write, re-interleave + delta then
+  deflate, and rebuild the line-offset table. Verbatim-copy untouched blocks.
+- **Validate any EXR write three ways** (you can't open Godot here): no-edit
+  round-trip is byte-identical via your own reader; edits persist with neighbours
+  unchanged; and decoded `base = V&31` lands cleanly in **0..31** matching the layer
+  manifest (a wrong predictor/interleave yields garbage, so this is a strong check).
+- The **EXR is the source the streamer loads** (`Image.load()` reads the raw file at
+  full precision). The `terrain_control_map.png` twin is a 16-bit grayscale export;
+  **don't rely on a 16-bit PNG round-tripping through Godot's importer** (it can
+  truncate to 8-bit and zero the low byte — that's why the project uses EXR). When
+  you edit the control map, edit the EXR and note the PNG twin goes stale.
+
+### Streamed world ⇒ do global calculations OFFLINE from the chunk GLBs
+- Because the terrain streams, **no runtime moment holds the whole heightfield.**
+  Any world-scale computation (water basins, river routing, biome passes) must run
+  **offline** over `terrain/chunks/*.glb`. Reuse the GLB parser in
+  `tools/bake_chunk_normals.py` (`parse_glb` / `accessor_view` / `read_vec3`); POSITION
+  is tightly-packed VEC3 float (bulk-read with `array('f')`). **Max-pool** surface
+  verts into a coarse grid — that drops the 25 m skirts (they hang below the
+  surface). Per-chunk world offset comes from the manifest `pos`; add it to local
+  verts (xz are recentred ±97 m, y is absolute).
+- Hydrology that worked here (`tools/build_water_bodies.py`): **Priority-Flood**
+  (Barnes 2014) for depression-fill + spill levels (outlets = map edge + sea-level
+  cells); then **D8 flow + accumulation** on the filled surface for rivers (use the
+  flood's settle order to break flat ties toward the pour point). Lakes = connected
+  standing-water components; rivers = accumulation over a threshold, traced to
+  polylines.
+
+### Water system & queryable world properties
+- **Ocean** = one translucent plane at `y=sea_level` that follows the player
+  (snapped to its vertex grid so world-space waves don't shimmer). Land is opaque
+  and above sea level, so it occludes the plane → **exact coastlines for free**, no
+  per-fragment work.
+- **Lakes/rivers can't use one flat global plane** (they sit at different levels and
+  follow terrain). Lakes = a bbox `PlaneMesh` at the lake level, **clipped to the
+  real shoreline** by sampling a small per-lake outline mask *by world position* in
+  the shader (`discard` off-shore). **Dilate the lake mask a couple of cells past
+  the waterline** so the flat plane tucks under the rising shore and reads flush
+  (same reason the sea looks flush). Rivers = thin ribbon `ArrayMesh`es along baked
+  centrelines. Build these **once at startup** (bounded) — never per-frame.
+- Expose world facts other systems need as a **GDScript autoload "map" singleton**
+  (`terrain/WaterMap.gd` → `/root/WaterMap`): `water_level_at(x,z)`,
+  `is_submerged(pos)`, `in_lake(x,z)`. **Lazy-load on first query** so unrelated
+  scenes (title/menu) pay nothing. Other systems fetch it with
+  `get_node_or_null("/root/WaterMap")` and degrade gracefully if absent.
+- **Texturing can double as gameplay logic.** Grass only spawns on grass-group
+  layers, so painting shore/river bands to a non-grass layer (pebble) in the control
+  map *automatically* stops grass there — no extra exclusion code. Prefer making one
+  source of truth (the control map) drive both look and behaviour.
+
+### Dense scatter without runtime mesh churn (`terrain/GrassScatterer.gd`)
+- For thousands of instances (grass), use a **`MultiMesh` per chunk** and **pool the
+  `MultiMeshInstance3D` nodes**, refilling their buffers as the player moves —
+  reusing resources, not creating them. This honours the "no per-chunk runtime
+  ArrayMesh/shape creation while streaming" rule (a `MultiMesh` buffer refill is far
+  lighter than building meshes, and pooling bounds even that). Budget per frame and
+  scatter nearest-first, exactly like `TerrainStreamer`.
+- Grass mesh LODs (baked on import) are applied by the MultiMesh automatically.
+  Anchor wind at the blade base (sway weight from `VERTEX.y`); for world-coherent
+  wind across randomly-yawed instances, rotate the world wind vector into object
+  space with `wind * mat3(MODEL_MATRIX)` (= `transpose·wind`, the inverse for a
+  rotation) instead of a per-vertex `inverse()`.
+
+### Derived assets generalised (extends the bake_chunk_normals rule)
+- This project has several **committed, derived assets**: baked chunk normals,
+  `terrain/water_bodies.json` + `terrain/water_masks/*.png`, and the painted
+  control-map EXR. Each has a committed, **idempotent** generator under `tools/`.
+  **Re-run the generator whenever its source is regenerated** (re-export terrain →
+  re-run `bake_chunk_normals.py` *and* `build_water_bodies.py`); a source re-export
+  silently reverts the derived edit. Keep generators idempotent and re-runnable in
+  one line, and `git` is the backup before any in-place asset rewrite.
+- Pure-Python PNG I/O is fine here (no PIL): 8-bit grayscale masks via a tiny
+  `zlib`+CRC writer; decode by undoing the per-row filter. Keep mask textures small
+  and binary (precision doesn't matter — a 0.5 threshold is robust to sRGB/filter).
+
