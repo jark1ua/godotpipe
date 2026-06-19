@@ -106,6 +106,8 @@ var _player: Node3D = null
 var _accum: float = 0.0
 var _logged_first: bool = false
 var _material: ShaderMaterial = null   # built once, shared by every chunk
+var _fixed_cache: Dictionary = {}      # chunk key#idx -> fixed ArrayMesh (or null)
+var _shape_cache: Dictionary = {}      # chunk key#idx -> trimesh Shape3D (shared)
 var _pi: int = 0                       # player's current chunk (i, j); kept for
 var _pj: int = 0                       # nearest-first ordering of loads/spawns
 var _fix_us: int = 0                   # per-frame normal-fix / collision time (usec),
@@ -267,7 +269,7 @@ func _spawn(key: String, packed: PackedScene) -> void:
 	if _loaded.size() == 1:
 		print("TerrainStreamer: first chunk '%s' spawned at %s with %d MeshInstance3D(s)" % [
 			key, inst.position, meshes.size()])
-	_build_meshes_now(meshes)
+	_build_meshes_now(meshes, key)
 
 # Gather every MeshInstance3D under a freshly-instanced chunk and apply the shared
 # terrain material.
@@ -283,22 +285,56 @@ func _collect_meshes(node: Node, out: Array) -> void:
 
 # Build the normal-fixed mesh and (optionally) the trimesh collision for each mesh,
 # timing the two phases separately so the debug print shows where the cost is.
-func _build_meshes_now(meshes: Array) -> void:
-	for mi_any in meshes:
-		var mi := mi_any as MeshInstance3D
-		var surfaces := _extract_surfaces(mi.mesh as ArrayMesh)
-		if surfaces.is_empty():
+#
+# Collision is always baked from the ORIGINAL mesh (normals don't affect it), so the
+# rebuilt mesh never enters the physics path. Both the fixed display mesh and the
+# trimesh shape are cached per chunk and reused on reload, so each unique chunk is
+# built at most once ever — no per-reload ArrayMesh/shape churn as you fly back and
+# forth. That churn (and baking collision off the rebuilt mesh) was the cause of the
+# fix_edge_normals crash.
+func _build_meshes_now(meshes: Array, cache_key: String) -> void:
+	for idx in range(meshes.size()):
+		var mi := meshes[idx] as MeshInstance3D
+		var src := mi.mesh as ArrayMesh
+		if src == null:
 			continue
+		var ck := "%s#%d" % [cache_key, idx]
+		if add_collision:
+			var t1 := Time.get_ticks_usec()
+			_attach_collision(mi, _get_shape(src, ck))
+			_coll_us += Time.get_ticks_usec() - t1
 		if fix_edge_normals:
 			var t0 := Time.get_ticks_usec()
-			var built := _build_fixed_mesh(surfaces, true)
-			if built["changed"]:
-				mi.mesh = built["mesh"]
+			var fixed := _get_fixed_mesh(src, ck)
+			if fixed != null:
+				mi.mesh = fixed
 			_fix_us += Time.get_ticks_usec() - t0
-		if add_collision and mi.mesh != null:
-			var t1 := Time.get_ticks_usec()
-			_attach_collision(mi, (mi.mesh as ArrayMesh).create_trimesh_shape())
-			_coll_us += Time.get_ticks_usec() - t1
+
+# Return the skirt-free mesh for a source mesh, building it once and caching by a
+# stable per-chunk key (null = "couldn't fix / no change", also cached so we don't
+# retry). Keyed by chunk (not the mesh RID) because RIDs can be reused after free.
+func _get_fixed_mesh(src: ArrayMesh, ck: String) -> ArrayMesh:
+	if src == null:
+		return null
+	if _fixed_cache.has(ck):
+		return _fixed_cache[ck]
+	var surfaces := _extract_surfaces(src)
+	var result: ArrayMesh = null
+	if not surfaces.is_empty():
+		var built := _build_fixed_mesh(surfaces, true)
+		if built["changed"] and (built["mesh"] as ArrayMesh).get_surface_count() > 0:
+			result = built["mesh"]
+	_fixed_cache[ck] = result
+	return result
+
+# Trimesh shape for a source mesh, built once and shared across reloads of the same
+# chunk (collision geometry is identical and a static shape is safe to share).
+func _get_shape(src: ArrayMesh, ck: String) -> Shape3D:
+	if _shape_cache.has(ck):
+		return _shape_cache[ck]
+	var shape := src.create_trimesh_shape()
+	_shape_cache[ck] = shape
+	return shape
 
 func _attach_collision(mi: MeshInstance3D, shape: Shape3D) -> void:
 	var body := StaticBody3D.new()
@@ -412,17 +448,15 @@ func _load_editor_preview() -> void:
 			inst.position = _meta[key]["pos"]
 			add_child(inst)
 			# No owner -> these nodes are not serialised into the .tscn.
-			# Material + normal fix only (no collision, no threading in preview).
+			# Material + normal fix only (no collision in preview).
 			var meshes: Array = []
 			_collect_meshes(inst, meshes)
 			if fix_edge_normals:
-				for mi_any in meshes:
-					var mi := mi_any as MeshInstance3D
-					var surfaces := _extract_surfaces(mi.mesh as ArrayMesh)
-					if not surfaces.is_empty():
-						var built := _build_fixed_mesh(surfaces, true)
-						if built["changed"]:
-							mi.mesh = built["mesh"]
+				for idx in range(meshes.size()):
+					var mi := meshes[idx] as MeshInstance3D
+					var fixed := _get_fixed_mesh(mi.mesh as ArrayMesh, "%s#%d" % [key, idx])
+					if fixed != null:
+						mi.mesh = fixed
 			_preview[key] = inst
 	print("TerrainStreamer preview: %d chunks around %s" % [_preview.size(), preview_focus_chunk])
 
