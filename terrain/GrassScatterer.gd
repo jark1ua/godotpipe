@@ -83,6 +83,25 @@ extends Node3D
 ## Global seed; change to reshuffle every field at once.
 @export var grass_seed: int = 1337
 
+@export_group("Meadow density field")
+## Modulate grass density with a domain-warped fBm field so plains read as patchy
+## meadows — lush clumps, thinner ground, occasional bare scrapes — instead of a flat
+## uniform carpet. 0 = off (uniform within grass texels). ~0.0015 = ~horizon-scale
+## patches; higher = smaller tufts. Shares the algorithm with terrain/ScatterField.gd.
+@export var meadow_freq: float = 0.0
+@export_range(1, 8) var meadow_octaves: int = 4
+## fBm value below which grass thins out toward bare (lower = grassier overall).
+@export_range(0.0, 1.0) var meadow_threshold: float = 0.3
+## Soft-edge half-width around the threshold (lush fades to thin over this band).
+@export_range(0.001, 0.5) var meadow_falloff: float = 0.25
+## Domain-warp amplitude (m) so meadow patches meander instead of forming blobs.
+@export var meadow_warp: float = 60.0
+## How strongly the field thins grass: 0 = no effect (even if freq>0), 1 = full mask.
+@export_range(0.0, 1.0) var meadow_strength: float = 1.0
+## Optional shared region seed (see ScatterKind.density_seed). 0 = derive from grass_seed.
+## Match a meadow-flower ScatterKind's density_seed to align the lush patches with it.
+@export var meadow_seed: int = 0
+
 # ---- per-blade placement ----------------------------------------------------
 ## How much each blade tilts to match the ground normal (0 = always upright,
 ## 1 = fully laid along the slope). A little looks natural; too much on slopes splays.
@@ -140,12 +159,14 @@ var _pool: Array[MultiMeshInstance3D] = []
 var _preview: Dictionary = {}     # editor-only, not saved
 var _placeholder: Mesh = null
 var _water: Node = null            # WaterMap autoload, for the under-water gate
+var _meadow: ScatterField = null   # optional meadow density modulation (null = off)
 var _pi: int = 0
 var _pj: int = 0
 
 func _ready() -> void:
 	_load_manifest()
 	_load_grass_layers()
+	_build_meadow_field()
 	_load_control_map()
 	if Engine.is_editor_hint():
 		return
@@ -333,6 +354,21 @@ func _load_grass_layers() -> void:
 		if String(li.get("group", "")) in grass_groups:
 			_grass_layers[int(li["index"])] = true
 
+# Build the optional meadow density field (null when meadow_freq <= 0). Reuses the same
+# domain-warped fBm machinery as the object scatterer so plains and forests read alike.
+func _build_meadow_field() -> void:
+	if meadow_freq <= 0.0:
+		_meadow = null
+		return
+	_meadow = ScatterField.make({
+		"seed": meadow_seed if meadow_seed != 0 else grass_seed,
+		"density_freq": meadow_freq,
+		"density_octaves": meadow_octaves,
+		"density_threshold": meadow_threshold,
+		"density_falloff": meadow_falloff,
+		"density_warp": meadow_warp,
+	})
+
 func _load_control_map() -> void:
 	_control_img = Image.new()
 	if _control_img.load(control_map_path) != OK:
@@ -373,6 +409,9 @@ func _grass_weight(wx: float, wz: float) -> float:
 		w += 1.0 - blend
 	if _grass_layers.has(over_l):
 		w += blend
+	# Thin the grass through the meadow density field (patchy lush/bare), if enabled.
+	if _meadow != null and meadow_strength > 0.0:
+		w *= lerp(1.0, _meadow.density_at(wx, wz), meadow_strength)
 	return clampf(w, 0.0, 1.0)
 
 # ---- grass mesh -------------------------------------------------------------
@@ -424,6 +463,7 @@ func _load_editor_preview() -> void:
 	_clear_editor_preview()
 	_load_manifest()
 	_load_grass_layers()
+	_build_meadow_field()
 	_load_control_map()
 	push_warning("GrassScatterer preview: editor has no terrain collision to raycast; "
 		+ "blades are placed on a flat plane at chunk height. Run the scene (F6) for the real field.")

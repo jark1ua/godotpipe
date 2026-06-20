@@ -67,6 +67,7 @@ var _world_size: float = 6000.0
 var _meta: Dictionary = {}            # "i_j" -> { h_min, h_max }
 var _layer_group: Dictionary = {}     # layer index -> group string
 var _kind_layers: Array = []          # per kind: Dictionary index->true (null = any ground)
+var _fields: Array = []               # per kind: ScatterField (blue_noise) or null (uniform)
 var _control_img: Image = null
 var _cm_w: int = 0
 var _cm_h: int = 0
@@ -82,6 +83,7 @@ var _pj: int = 0
 func _ready() -> void:
 	_load_manifest()
 	_load_layer_groups()
+	_build_fields()
 	_load_control_map()
 	_pools.resize(kinds.size())
 	for i in range(kinds.size()):
@@ -159,36 +161,60 @@ func _scatter_chunk(key: String) -> bool:
 		var kind: ScatterKind = kinds[ki]
 		if kind == null or kind.scene == null:
 			continue
-		var rng := RandomNumberGenerator.new()
-		rng.seed = hash(key) ^ scatter_seed ^ (kind.seed_offset * 2654435761)
 		var cos_max := cos(deg_to_rad(min(kind.max_slope_deg, global_max_slope_deg)))
 		var layers: Variant = _kind_layers[ki]
-		for n in range(kind.density):
-			var wx := cx + rng.randf_range(-half, half)
-			var wz := cz + rng.randf_range(-half, half)
-			# Biome gate: probability follows how much of this texel is the kind's group.
-			if layers != null and rng.randf() > _group_weight(wx, wz, layers):
-				continue
-			var hit := _ground_hit(space, wx, wz, ray_top, ray_bot)
-			if hit.is_empty():
-				continue
-			var nrm: Vector3 = hit["normal"]
-			if nrm.y < cos_max:
-				continue
-			var pos: Vector3 = hit["position"]
-			if not _placement_ok(kind, pos):
-				continue
-			pos.y -= kind.y_offset
-			var yaw := rng.randf() * TAU if kind.random_yaw else 0.0
-			var scl := rng.randf_range(kind.min_scale, kind.max_scale)
-			var node := _take_instance(ki)
-			node.transform = _object_transform(pos, nrm, yaw, scl, kind.align_to_normal)
-			node.visible = true
-			placed.append([ki, node])
+		var field: ScatterField = _fields[ki]
+		if field != null:
+			# Advanced path: blue-noise candidates masked by the region/grove density
+			# field times the biome weight. Raycasts only fire for accepted candidates.
+			for cand in field.candidates(cx - half, cz - half, cx + half, cz + half):
+				var p2: Vector2 = cand[0]
+				var rng := field.cell_rng(cand[1], kind.seed_offset)
+				var gw := 1.0 if layers == null else _group_weight(p2.x, p2.y, layers)
+				if rng.randf() > field.density_at(p2.x, p2.y) * gw:
+					continue
+				var node := _place_candidate(ki, kind, p2.x, p2.y, rng, space, ray_top, ray_bot, cos_max)
+				if node != null:
+					placed.append([ki, node])
+		else:
+			# Legacy uniform path: `density` independent random samples per chunk.
+			var rng := RandomNumberGenerator.new()
+			rng.seed = hash(key) ^ scatter_seed ^ (kind.seed_offset * 2654435761)
+			for n in range(kind.density):
+				var wx := cx + rng.randf_range(-half, half)
+				var wz := cz + rng.randf_range(-half, half)
+				# Biome gate: probability follows how much of this texel is the kind's group.
+				if layers != null and rng.randf() > _group_weight(wx, wz, layers):
+					continue
+				var node := _place_candidate(ki, kind, wx, wz, rng, space, ray_top, ray_bot, cos_max)
+				if node != null:
+					placed.append([ki, node])
 	_active[key] = placed
 	if debug_objects:
 		print("ObjectScatterer: chunk %s -> %d object(s)" % [key, placed.size()])
 	return true
+
+# Try to place one candidate at world XZ: raycast the ground, reject by slope and the
+# kind's placement rule (land/water_edge), then take a pooled instance and pose it.
+# Returns the placed Node3D, or null if any gate rejected it. `rng` supplies yaw/scale.
+func _place_candidate(ki: int, kind: ScatterKind, wx: float, wz: float, rng: RandomNumberGenerator,
+		space: PhysicsDirectSpaceState3D, ray_top: float, ray_bot: float, cos_max: float) -> Node3D:
+	var hit := _ground_hit(space, wx, wz, ray_top, ray_bot)
+	if hit.is_empty():
+		return null
+	var nrm: Vector3 = hit["normal"]
+	if nrm.y < cos_max:
+		return null
+	var pos: Vector3 = hit["position"]
+	if not _placement_ok(kind, pos):
+		return null
+	pos.y -= kind.y_offset
+	var yaw := rng.randf() * TAU if kind.random_yaw else 0.0
+	var scl := rng.randf_range(kind.min_scale, kind.max_scale)
+	var node := _take_instance(ki)
+	node.transform = _object_transform(pos, nrm, yaw, scl, kind.align_to_normal)
+	node.visible = true
+	return node
 
 # True if `pos` satisfies the kind's placement rule (land vs shoreline band).
 func _placement_ok(kind: ScatterKind, pos: Vector3) -> bool:
@@ -288,6 +314,17 @@ func _load_layer_groups() -> void:
 				d[idx] = true
 		_kind_layers[ki] = d
 
+# Build one ScatterField per blue_noise kind (uniform kinds get null). Cheap: each is a
+# couple of FastNoiseLite objects; built once and reused for every chunk.
+func _build_fields() -> void:
+	_fields.resize(kinds.size())
+	for ki in range(kinds.size()):
+		var kind: ScatterKind = kinds[ki]
+		if kind != null and kind.distribution == "blue_noise":
+			_fields[ki] = ScatterField.make(kind.field_params(scatter_seed))
+		else:
+			_fields[ki] = null
+
 func _load_control_map() -> void:
 	_control_img = Image.new()
 	if _control_img.load(control_map_path) != OK:
@@ -336,6 +373,7 @@ func _load_editor_preview() -> void:
 	_clear_editor_preview()
 	_load_manifest()
 	_load_layer_groups()
+	_build_fields()
 	_load_control_map()
 	push_warning("ObjectScatterer preview: editor has no terrain collision to raycast; "
 		+ "objects are placed on a flat plane at chunk height. Run the scene (F6) for the real field.")
@@ -361,21 +399,34 @@ func _preview_chunk(key: String) -> void:
 		var kind: ScatterKind = kinds[ki]
 		if kind == null or kind.scene == null:
 			continue
-		var rng := RandomNumberGenerator.new()
-		rng.seed = hash(key) ^ scatter_seed ^ (kind.seed_offset * 2654435761)
 		var layers: Variant = _kind_layers[ki]
-		for n in range(kind.density):
-			var wx := cx + rng.randf_range(-half, half)
-			var wz := cz + rng.randf_range(-half, half)
-			if layers != null and rng.randf() > _group_weight(wx, wz, layers):
-				continue
-			var inst := (kind.scene as PackedScene).instantiate() as Node3D
-			var yaw := rng.randf() * TAU if kind.random_yaw else 0.0
-			var scl := rng.randf_range(kind.min_scale, kind.max_scale)
-			inst.transform = _object_transform(Vector3(wx, y, wz), Vector3.UP, yaw, scl, 0.0)
-			add_child(inst)   # no owner -> not serialised into the .tscn
-			nodes.append(inst)
+		var field: ScatterField = _fields[ki]
+		if field != null:
+			for cand in field.candidates(cx - half, cz - half, cx + half, cz + half):
+				var p2: Vector2 = cand[0]
+				var crng := field.cell_rng(cand[1], kind.seed_offset)
+				var gw := 1.0 if layers == null else _group_weight(p2.x, p2.y, layers)
+				if crng.randf() > field.density_at(p2.x, p2.y) * gw:
+					continue
+				nodes.append(_spawn_preview(kind, p2.x, y, p2.y, crng))
+		else:
+			var rng := RandomNumberGenerator.new()
+			rng.seed = hash(key) ^ scatter_seed ^ (kind.seed_offset * 2654435761)
+			for n in range(kind.density):
+				var wx := cx + rng.randf_range(-half, half)
+				var wz := cz + rng.randf_range(-half, half)
+				if layers != null and rng.randf() > _group_weight(wx, wz, layers):
+					continue
+				nodes.append(_spawn_preview(kind, wx, y, wz, rng))
 	_preview[key] = nodes
+
+func _spawn_preview(kind: ScatterKind, wx: float, y: float, wz: float, rng: RandomNumberGenerator) -> Node3D:
+	var inst := (kind.scene as PackedScene).instantiate() as Node3D
+	var yaw := rng.randf() * TAU if kind.random_yaw else 0.0
+	var scl := rng.randf_range(kind.min_scale, kind.max_scale)
+	inst.transform = _object_transform(Vector3(wx, y, wz), Vector3.UP, yaw, scl, 0.0)
+	add_child(inst)   # no owner -> not serialised into the .tscn
+	return inst
 
 func _clear_editor_preview() -> void:
 	for key in _preview.keys():

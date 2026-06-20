@@ -109,6 +109,18 @@ placement = "land"
 avoid_water = true
 water_band = 1.2
 seed_offset = 5
+distribution = "blue_noise"
+spacing_m = 8.0
+jitter = 0.85
+density_freq = 0.0011
+density_octaves = 4
+density_threshold = 0.5
+density_falloff = 0.12
+density_invert = false
+density_warp = 90.0
+density_seed = 7777
+clump_freq = 0.006
+clump_amount = 0.55
 
 [sub_resource type="Resource" id="k_shrub"]
 script = ExtResource("2_kind")
@@ -126,6 +138,18 @@ placement = "land"
 avoid_water = true
 water_band = 1.2
 seed_offset = 6
+distribution = "blue_noise"
+spacing_m = 7.0
+jitter = 0.9
+density_freq = 0.0011
+density_octaves = 4
+density_threshold = 0.55
+density_falloff = 0.14
+density_invert = true
+density_warp = 90.0
+density_seed = 7777
+clump_freq = 0.012
+clump_amount = 0.6
 
 [sub_resource type="Resource" id="k_log"]
 script = ExtResource("2_kind")

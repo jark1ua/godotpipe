@@ -30,3 +30,8 @@ shader_parameter/flutter_speed = 4.0
 [node name="Grass" type="Node3D"]
 script = ExtResource("1_grass")
 grass_material = SubResource("Mat_grass")
+meadow_freq = 0.0016
+meadow_threshold = 0.3
+meadow_falloff = 0.28
+meadow_warp = 60.0
+meadow_strength = 0.85
