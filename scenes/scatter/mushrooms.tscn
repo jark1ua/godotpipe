@@ -1,0 +1,78 @@
+; ============================================================================
+; mushrooms.tscn — placeholder mushroom cluster for FOREST terrain (a surprise!).
+; A few pale stems with red caps, billboard far. Pivot at the base. Small, so it
+; reads as woodland detail tucked among the trees/logs.
+; ============================================================================
+[gd_scene load_steps=7 format=3 uid="uid://oscat0mushrm01"]
+
+[sub_resource type="CylinderMesh" id="m_stem"]
+top_radius = 0.05
+bottom_radius = 0.06
+height = 0.28
+radial_segments = 6
+
+[sub_resource type="StandardMaterial3D" id="mat_stem"]
+albedo_color = Color(0.86, 0.82, 0.7, 1)
+roughness = 1.0
+
+[sub_resource type="SphereMesh" id="m_cap"]
+radius = 0.13
+height = 0.16
+radial_segments = 8
+rings = 4
+is_hemisphere = true
+
+[sub_resource type="StandardMaterial3D" id="mat_cap"]
+albedo_color = Color(0.7, 0.18, 0.14, 1)
+roughness = 0.9
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(0.4, 0.32)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.66, 0.2, 0.16, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="Mushrooms" type="Node3D"]
+
+[node name="Stem_A" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.14, 0)
+visibility_range_end = 28.0
+visibility_range_end_margin = 6.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_stem")
+material_override = SubResource("mat_stem")
+
+[node name="Cap_A" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.28, 0)
+visibility_range_end = 28.0
+visibility_range_end_margin = 6.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_cap")
+material_override = SubResource("mat_cap")
+
+[node name="Stem_B" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8, 0.2, 0.11, 0.13)
+visibility_range_end = 28.0
+visibility_range_end_margin = 6.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_stem")
+material_override = SubResource("mat_stem")
+
+[node name="Cap_B" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8, 0.2, 0.22, 0.13)
+visibility_range_end = 28.0
+visibility_range_end_margin = 6.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_cap")
+material_override = SubResource("mat_cap")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1, 0.2, 0.06)
+visibility_range_begin = 24.0
+visibility_range_begin_margin = 6.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")

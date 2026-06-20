@@ -237,6 +237,17 @@ available mid-session if `.mcp.json` changed during it.
   round-trip is byte-identical via your own reader; edits persist with neighbours
   unchanged; and decoded `base = V&31` lands cleanly in **0..31** matching the layer
   manifest (a wrong predictor/interleave yields garbage, so this is a strong check).
+- **Edits to the control map must FEATHER, never stamp pure base.** The base map (from
+  Blender) blends ~60% of texels (`overlay`/`blend` non-zero); writing `overlay=0,blend=0`
+  (pure base) over a region gives hard, square, blend-free patches (the bug that made the
+  pebble/rock paint look blocky). `build_water_bodies.py` now paints at **full 2048
+  resolution** (not coarse 512 cells) and feathers: each region is a 512 strength field
+  (box-blurred), bilinearly upsampled; per texel `_feather_pack(s,target,orig)` writes
+  `base=target,overlay=orig` for the strong interior and swaps to `base=orig,overlay=target`
+  past the 50/50 seam — a continuous transition the shader's height-blend reads as smooth.
+  Bulk-edit the EXR via `ControlMapEXR.read_all_packed()/write_all_packed()` (per-texel
+  `get/set_packed` over 4M texels is far too slow). Rock-loosening is the same feather keyed
+  on terrain slope; a conservative singleton de-speckle removes lone outliers.
 - The **EXR is the source the streamer loads** (`Image.load()` reads the raw file at
   full precision). The `terrain_control_map.png` twin is a 16-bit grayscale export;
   **don't rely on a 16-bit PNG round-tripping through Godot's importer** (it can
@@ -336,6 +347,21 @@ available mid-session if `.mcp.json` changed during it.
   wind across randomly-yawed instances, rotate the world wind vector into object
   space with `wind * mat3(MODEL_MATRIX)` (= `transpose·wind`, the inverse for a
   rotation) instead of a per-vertex `inverse()`.
+
+### Chunky scattered objects (`terrain/ObjectScatterer.gd` + `ScatterKind.gd`)
+- Sparse objects (rocks, boulders, trees, shrubs, logs, reeds, …) that each want **real
+  geometry AND discrete LODs** (a tree → billboard far away) can't ride a `MultiMesh` (it
+  can't swap LOD nodes). Use **pooled PackedScene instances** instead: same streaming
+  discipline as `GrassScatterer` (per-chunk, nearest-first, time-budgeted, recycle past
+  `keep_radius`, deterministic per-chunk+kind RNG), but pooled PER KIND. **No runtime mesh/
+  shape creation** — instancing a scene reuses shared mesh resources; safe like the grass.
+- Kinds are **data** (`ScatterKind` resources set in `scenes/Objects.tscn`), routed to a
+  biome by control-map **group** (boulders→rock, small rocks→gravel/pebble, snowy→snow,
+  trees→grass+forest, reeds→`placement="water_edge"` via WaterMap, driftwood→sand). Swap a
+  kind's `scene` for your model and keep its `visibility_range` LOD wiring (placeholders in
+  `scenes/scatter/*.tscn`, pattern from `scenes/lod_tree.tscn`: near mesh → mid → billboard
+  quad, `billboard_mode=1`). Keep `kinds` an **untyped** `Array` so the hand-authored .tscn
+  list loads cleanly.
 
 ### Derived assets generalised (extends the bake_chunk_normals rule)
 - This project has several **committed, derived assets**: baked chunk normals,

@@ -58,7 +58,7 @@ Usage
         [--min-depth 3.0] [--level-tol 0.6] [--open-frac 0.08] [--shore-dilate 2]
         [--shore-eps 0.5] [--river-threshold 650] [--river-min-points 10]
         [--paint-control-map] [--pebble-band 4] [--river-band 2]
-        [--loosen-rock] [--rock-slope-deg 30]
+        [--loosen-rock] [--rock-slope-deg 30] [--rock-slope-soft 8] [--no-despeckle]
         [--pebble-layer -1 (auto from manifest)] [--layer-manifest FILE]
         [--chunks DIR] [--manifest FILE] [--out FILE] [--masks DIR]
         [--control-map terrain/terrain_control_map.exr]
@@ -475,89 +475,169 @@ def _texel_mappers(cm, world, half):
     return tx, ty
 
 
-def _cell_texel_box(cm, idx, res, world, half, tx, ty):
-    """Texel bounding box (x0, x1, y0, y1) covered by coarse cell `idx`."""
+def box_blur(field, res, radius):
+    """Separable box blur of a res*res float field. Softens a binary region into a ramp so
+    the feathered paint fades over ~radius cells instead of a hard edge."""
+    if radius <= 0:
+        return field
+    w = 2 * radius + 1
+    tmp = [0.0] * (res * res)
+    for y in range(res):
+        row = y * res
+        for x in range(res):
+            s = 0.0
+            for dx in range(-radius, radius + 1):
+                nx = x + dx
+                nx = 0 if nx < 0 else (res - 1 if nx >= res else nx)
+                s += field[row + nx]
+            tmp[row + x] = s / w
+    out = [0.0] * (res * res)
+    for x in range(res):
+        for y in range(res):
+            s = 0.0
+            for dy in range(-radius, radius + 1):
+                ny = y + dy
+                ny = 0 if ny < 0 else (res - 1 if ny >= res else ny)
+                s += tmp[ny * res + x]
+            out[y * res + x] = s / w
+    return out
+
+
+def _bilinear(field, res, gx, gy):
+    """Bilinear sample of a res*res field at fractional grid coords (clamped)."""
+    if gx < 0.0: gx = 0.0
+    elif gx > res - 1: gx = float(res - 1)
+    if gy < 0.0: gy = 0.0
+    elif gy > res - 1: gy = float(res - 1)
+    x0 = int(gx); y0 = int(gy)
+    x1 = x0 + 1 if x0 < res - 1 else x0
+    y1 = y0 + 1 if y0 < res - 1 else y0
+    fx = gx - x0; fy = gy - y0
+    a = field[y0 * res + x0]; b = field[y0 * res + x1]
+    c = field[y1 * res + x0]; d = field[y1 * res + x1]
+    return (a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy
+
+
+def _feather_pack(s, target, orig_packed):
+    """Pack a control-map texel that blends `target` over the existing layer by strength s
+    (0..1). The control map only encodes an overlay fraction up to 0.5 (50/50), so:
+      s >= 0.5  -> base = target, overlay = existing; overlay fraction = (1 - s)  (s=1 ->
+                   pure target, s=0.5 -> 50/50);
+      s <  0.5  -> base = existing, overlay = target; overlay fraction = s        (s->0 ->
+                   pure existing, s=0.5 -> 50/50).
+    This gives the shader a continuous feather from full target in the interior, through a
+    50/50 seam at the region edge, out to the untouched surroundings — no hard squares."""
+    orig_base = orig_packed & 31
+    if s >= 0.5:
+        braw = int(round((1.0 - s) * 62.0))
+        braw = 31 if braw > 31 else (0 if braw < 0 else braw)
+        return (target & 31) | (orig_base << 5) | (braw << 10)
+    braw = int(round(s * 62.0))
+    braw = 31 if braw > 31 else (0 if braw < 0 else braw)
+    return (orig_base & 31) | ((target & 31) << 5) | (braw << 10)
+
+
+def _paint_pass(pk, cm, res, world, half, tx, ty, strength, target_of_cell, forbid,
+                only_rock, grp32, eps=0.02):
+    """Composite one feathered paint pass into the in-memory packed array `pk`.
+
+    For every control texel inside a coarse cell whose blurred `strength` is > eps, sample
+    the strength bilinearly (so the 512-grid region upsamples to a smooth full-resolution
+    ramp, not a 12 m block) and feather `target` over whatever is already there. `forbid`
+    skips texels whose existing base group must not be painted over (sand/snow). `only_rock`
+    restricts a pass to texels that are currently rock (rock-loosening). `target_of_cell`
+    maps a 512 cell index to the layer to paint (a constant for pebble, the per-cell nearest
+    biome for rock)."""
+    W, H = cm.W, cm.H
     cell_m = world / (res - 1)
-    gx = idx % res
-    gy = idx // res
-    wx = gx / (res - 1) * world - half
-    wz = half - gy / (res - 1) * world
-    x0 = tx(wx - cell_m * 0.5)
-    x1 = tx(wx + cell_m * 0.5)
-    ya = ty(wz - cell_m * 0.5)
-    yb = ty(wz + cell_m * 0.5)
-    y0, y1 = (ya, yb) if ya <= yb else (yb, ya)
-    return x0, x1, y0, y1
-
-
-def paint_pebble_jobs(cm, jobs, res, world, half, pebble_layer, idx_group):
-    """Stamp `pebble_layer` into the (already-open) control-map EXR for a list of paint
-    jobs. Each job is (cells, forbid_groups): `cells` is a set of 512-grid indices; a
-    control texel inside one of those cells is set to solid pebble (base=layer, overlay=0,
-    blend=0) UNLESS the layer already there belongs to a forbidden group.
-
-    `forbid_groups` is how the caller honours the "don't paint over X" rules per source:
-      * river banks pass {"snow", "sand"} — pebble must not bury snowfields or sand;
-      * lake/basin cells pass {"sand"}     — sand rings the shore as a boundary, and the
-        basin interior inside that sand boundary is filled with pebble.
-    The check is PER TEXEL (not per coarse cell) so a half-sand beach keeps its sand texels
-    and only its non-sand texels turn to pebble."""
-    tx, ty = _texel_mappers(cm, world, half)
-    packed = pebble_layer & 0x7FFF   # base = pebble, overlay 0, blend 0 -> pure pebble
+    support = [i for i in range(res * res) if strength[i] > eps]
     painted = 0
-    for cells, forbid in jobs:
-        for idx in cells:
-            x0, x1, y0, y1 = _cell_texel_box(cm, idx, res, world, half, tx, ty)
-            for ty_ in range(y0, y1 + 1):
-                for tx_ in range(x0, x1 + 1):
-                    if forbid:
-                        base = cm.get_packed(tx_, ty_) & 31
-                        if idx_group.get(base) in forbid:
-                            continue
-                    cm.set_packed(tx_, ty_, packed)
-                    painted += 1
+    for c in support:
+        gx = c % res
+        gy = c // res
+        wx = gx / (res - 1) * world - half
+        wz = half - gy / (res - 1) * world
+        x0 = tx(wx - cell_m * 0.5); x1 = tx(wx + cell_m * 0.5)
+        ya = ty(wz - cell_m * 0.5); yb = ty(wz + cell_m * 0.5)
+        ylo, yhi = (ya, yb) if ya <= yb else (yb, ya)
+        for tyy in range(ylo, yhi + 1):
+            rowi = tyy * W
+            wzz = tyy / (H - 1) * world - half        # texel row -> world z (row 0 = north)
+            fgy = (half - wzz) / world * (res - 1)
+            for txx in range(x0, x1 + 1):
+                pos = rowi + txx
+                base = pk[pos] & 31
+                if only_rock and grp32[base] != "rock":
+                    continue
+                if forbid and grp32[base] in forbid:
+                    continue
+                wxx = txx / (W - 1) * world - half
+                fgx = (wxx + half) / world * (res - 1)
+                s = _bilinear(strength, res, fgx, fgy)
+                if s < eps:
+                    continue
+                tcx = int(fgx + 0.5); tcy = int(fgy + 0.5)
+                tcx = 0 if tcx < 0 else (res - 1 if tcx > res - 1 else tcx)
+                tcy = 0 if tcy < 0 else (res - 1 if tcy > res - 1 else tcy)
+                pk[pos] = _feather_pack(s, target_of_cell(tcy * res + tcx), pk[pos])
+                painted += 1
     return painted
 
 
-def loosen_rock(cm, height, res, world, half, idx_group, grass_default,
-                slope_deg_keep):
-    """Convert gentle-slope rock to its surrounding grass/forest biome, in-place in the
-    (already-open) control-map EXR. Rock only really belongs on steep ground; the map had
-    too much of it, so any coarse cell whose CURRENT base layer is in the 'rock' group AND
-    whose terrain slope is below `slope_deg_keep` is reclassified to the nearest grass/
-    forest layer (so local biome — meadow vs conifer floor — is preserved rather than a
-    flat single green).
+def despeckle_base(pk, cm, grp32):
+    """Gentle cleanup: replace texels whose base GROUP matches none of their 4 neighbours
+    (a lone speckle in the hodgepodge) with a neighbouring texel that belongs to a real
+    region. Overlay/blend come along (we copy the whole neighbour), so the artful base
+    blends are otherwise untouched. Singletons only — conservative by design."""
+    W, H = cm.W, cm.H
+    src = list(pk)
+    changed = 0
+    for y in range(1, H - 1):
+        rowi = y * W
+        for x in range(1, W - 1):
+            pos = rowi + x
+            g = grp32[src[pos] & 31]
+            up = src[pos - W]; dn = src[pos + W]; le = src[pos - 1]; ri = src[pos + 1]
+            gu = grp32[up & 31]; gd = grp32[dn & 31]
+            gl = grp32[le & 31]; gr = grp32[ri & 31]
+            if g == gu or g == gd or g == gl or g == gr:
+                continue   # belongs to a region (>=1 neighbour shares its group)
+            # isolated: adopt a neighbour whose group is itself part of a region here
+            choice = up
+            for cand, cg in ((up, gu), (dn, gd), (le, gl), (ri, gr)):
+                if (cg == gu) + (cg == gd) + (cg == gl) + (cg == gr) >= 2:
+                    choice = cand
+                    break
+            pk[pos] = choice
+            changed += 1
+    return changed
 
-    Slope comes from the offline max-pooled heightfield (central differences over the
-    coarse grid). Replacement layer is found by a multi-source BFS out from every
-    grass/forest cell, so each de-rocked cell adopts the layer id of the closest such cell;
-    cells with no biome anywhere fall back to `grass_default`."""
+
+def slope_deg_field(height, res, cell_m):
+    """Per-cell terrain slope in degrees (central differences over the coarse heightfield)."""
     import math
+    out = [0.0] * (res * res)
+    for y in range(res):
+        for x in range(res):
+            i = y * res + x
+            xm = height[i - 1] if x > 0 else height[i]
+            xp = height[i + 1] if x < res - 1 else height[i]
+            ym = height[i - res] if y > 0 else height[i]
+            yp = height[i + res] if y < res - 1 else height[i]
+            dzdx = (xp - xm) / (2.0 * cell_m)
+            dzdy = (yp - ym) / (2.0 * cell_m)
+            out[i] = math.degrees(math.atan(math.sqrt(dzdx * dzdx + dzdy * dzdy)))
+    return out
+
+
+def nearest_biome_field(base_layer, res, grp32):
+    """For each cell, the layer index of the nearest grass/forest cell (multi-source BFS),
+    so a de-rocked cell takes on its local biome rather than a flat single green."""
     from collections import deque
-    cell_m = world / (res - 1)
-    tan_keep = math.tan(math.radians(slope_deg_keep))
-    tx, ty = _texel_mappers(cm, world, half)
-
-    def world_x(gx):
-        return gx / (res - 1) * world - half
-
-    def world_z(gy):
-        return half - gy / (res - 1) * world
-
-    # Current base layer per coarse cell (sample the cell-centre texel).
-    base_layer = [0] * (res * res)
-    for gy in range(res):
-        for gx in range(res):
-            i = gy * res + gx
-            base_layer[i] = cm.get_packed(tx(world_x(gx)), ty(world_z(gy))) & 31
-
-    # Multi-source BFS: seed every grass/forest cell with its own layer id; propagate the
-    # nearest such id across the whole grid (so de-rocked cells can read it).
-    BIOME = ("grass", "forest")
     nearest = [-1] * (res * res)
     dq = deque()
     for i in range(res * res):
-        if idx_group.get(base_layer[i]) in BIOME:
+        if grp32[base_layer[i]] in ("grass", "forest"):
             nearest[i] = base_layer[i]
             dq.append(i)
     while dq:
@@ -571,40 +651,7 @@ def loosen_rock(cm, height, res, world, half, idx_group, grass_default,
                 if nearest[ni] == -1:
                     nearest[ni] = nearest[i]
                     dq.append(ni)
-
-    def slope_tan(x, y):
-        i = y * res + x
-        xm = height[i - 1] if x > 0 else height[i]
-        xp = height[i + 1] if x < res - 1 else height[i]
-        ym = height[i - res] if y > 0 else height[i]
-        yp = height[i + res] if y < res - 1 else height[i]
-        dzdx = (xp - xm) / (2.0 * cell_m)
-        dzdy = (yp - ym) / (2.0 * cell_m)
-        return math.sqrt(dzdx * dzdx + dzdy * dzdy)
-
-    changed = 0
-    for gy in range(res):
-        for gx in range(res):
-            i = gy * res + gx
-            if idx_group.get(base_layer[i]) != "rock":
-                continue
-            if slope_tan(gx, gy) >= tan_keep:
-                continue   # steep enough — keep it rocky
-            new_layer = nearest[i] if nearest[i] >= 0 else grass_default
-            packed = new_layer & 0x7FFF
-            x0, x1, y0, y1 = _cell_texel_box(cm, i, res, world, half, tx, ty)
-            cell_changed = False
-            for ty_ in range(y0, y1 + 1):
-                for tx_ in range(x0, x1 + 1):
-                    # Only repaint texels that are themselves rock, so the coarse cell can't
-                    # bleed over an adjacent sand/snow texel sharing its box.
-                    if idx_group.get(cm.get_packed(tx_, ty_) & 31) != "rock":
-                        continue
-                    cm.set_packed(tx_, ty_, packed)
-                    cell_changed = True
-            if cell_changed:
-                changed += 1
-    return changed
+    return nearest
 
 
 def write_gray_png(path, w, h, rows):
@@ -688,7 +735,9 @@ def main(argv):
     river_lift = 0.3           # raise the ribbon this far above the terrain sample
     paint_cm = False
     loosen_rock_flag = False    # reclassify gentle-slope rock -> surrounding grass/forest
-    rock_slope_deg = 30.0       # terrain below this slope is too gentle to stay rock
+    rock_slope_deg = 30.0       # slope midpoint: 50/50 rock<->biome here (less rock below)
+    rock_slope_soft = 8.0       # +/- this many deg is the soft rock<->biome transition band
+    despeckle = True            # gentle cleanup of lone single-texel speckle in the base map
     pebble_band = 4            # pebble shore width (cells) OUTSIDE the rendered water edge,
                               # so it forms a visible band around the water, not under it
     river_band = 2            # pebble bank on each side of a river channel (cells)
@@ -717,6 +766,8 @@ def main(argv):
         elif t == "--paint-control-map": paint_cm = True
         elif t == "--loosen-rock": loosen_rock_flag = True
         elif t == "--rock-slope-deg": i += 1; rock_slope_deg = float(a[i])
+        elif t == "--rock-slope-soft": i += 1; rock_slope_soft = float(a[i])
+        elif t == "--no-despeckle": despeckle = False
         elif t == "--pebble-band": i += 1; pebble_band = int(a[i])
         elif t == "--river-band": i += 1; river_band = int(a[i])
         elif t == "--pebble-layer": i += 1; pebble_layer = int(a[i])
@@ -841,39 +892,74 @@ def main(argv):
     if paint_cm or loosen_rock_flag:
         import exr_control_map
         idx_group, grass_default = load_layer_groups(layer_manifest)
+        grp32 = [idx_group.get(i) for i in range(32)]   # fast group lookup by base id
         cm = exr_control_map.ControlMapEXR(control_path)
+        tx, ty = _texel_mappers(cm, world, half)
+        W = cm.W
+        # Decode the whole control map into memory once; every edit composites into pk and
+        # we write it back at the end. Edits FEATHER (base+overlay+blend) at full 2048
+        # resolution instead of stamping pure-base 12 m squares, so boundaries read smooth.
+        pk = cm.read_all_packed()
 
         if loosen_rock_flag:
-            print("Loosening rock: reclassifying rock-group cells below %.0f deg slope to "
-                  "the surrounding grass/forest..." % rock_slope_deg)
-            ch = loosen_rock(cm, height, res, world, half, idx_group, grass_default,
-                             rock_slope_deg)
-            print("  reclassified %d coarse cell(s) of gentle-slope rock." % ch)
+            # Rock only belongs on steep ground. Feather rock -> its nearest grass/forest
+            # biome by a slope strength: fully biome below (mid-soft) deg, 50/50 at mid,
+            # fully rock above (mid+soft). Only rock texels are touched (no sand/snow bleed).
+            base_layer = [pk[ty(world_z(gy)) * W + tx(world_x(gx))] & 31
+                          for gy in range(res) for gx in range(res)]
+            nearest = nearest_biome_field(base_layer, res, grp32)
+            slope = slope_deg_field(height, res, cell_m)
+            lo = rock_slope_deg - rock_slope_soft   # below -> fully biome
+            hi = rock_slope_deg + rock_slope_soft   # above -> fully rock (untouched)
+            rock_strength = [0.0] * (res * res)
+            for i in range(res * res):
+                if grp32[base_layer[i]] != "rock":
+                    continue
+                t = (hi - slope[i]) / (hi - lo) if hi > lo else 1.0
+                t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+                rock_strength[i] = t * t * (3.0 - 2.0 * t)   # smoothstep
+            rock_strength = box_blur(rock_strength, res, 1)
+            print("Loosening rock: feathering rock-group cells around %.0f deg slope into "
+                  "the surrounding grass/forest biome..." % rock_slope_deg)
+            n = _paint_pass(pk, cm, res, world, half, tx, ty, rock_strength,
+                            lambda c: nearest[c] if nearest[c] >= 0 else grass_default,
+                            None, True, grp32)
+            print("  feathered %d rock texel(s)." % n)
 
         if paint_cm:
-            # Pebble = a VISIBLE band of shore around each lake, the basin floor under it,
-            # plus river banks. The lake band is grown from the RENDERED water footprint
-            # (mask) so the shore ring lands OUTSIDE the water plane (visible), and we now
-            # ALSO paint the basin interior (the footprint itself / lake floor) — sand acts
-            # as the boundary, so everything inside that isn't sand becomes pebble.
-            #
-            # Per-source "don't paint over" rules (checked per texel in paint_pebble_jobs):
-            #   * lake shore + basin floor: forbid {sand} (sand rings the shore as a
-            #     boundary; the non-sand interior within it fills with pebble);
-            #   * river banks: forbid {snow, sand} (don't bury snowfields or sand).
-            lake_band = dilate(water_footprint, res, pebble_band)
-            lake_cells = lake_band - sea_set            # shore ring + basin floor (keep water)
-            river_banks = dilate(rendered_rivers, res, river_band) - lake_set - sea_set
+            # Pebble = a VISIBLE shore band around each lake, the basin floor under it, and
+            # river banks. The lake band grows from the RENDERED water footprint (so the
+            # shore ring lands outside the water plane) and now ALSO fills the basin interior
+            # (sand is the boundary; the non-sand inside it becomes pebble). Each region is a
+            # binary 512 field, box-blurred so the feather fades over ~2 cells.
+            #   * lake shore + basin floor: forbid {sand};
+            #   * river banks: forbid {snow, sand}.
             layer = pebble_layer if pebble_layer >= 0 else resolve_pebble_layer(layer_manifest)
-            jobs = [
-                (lake_cells, {"sand"}),
-                (river_banks, {"snow", "sand"}),
-            ]
-            print("Painting pebble layer %d into %s over %d lake/basin + %d river-bank "
-                  "cell(s)..." % (layer, control_path, len(lake_cells), len(river_banks)))
-            n = paint_pebble_jobs(cm, jobs, res, world, half, layer, idx_group)
-            print("Painted %d control-map texel(s)." % n)
+            lake_cells = dilate(water_footprint, res, pebble_band) - sea_set
+            river_banks = dilate(rendered_rivers, res, river_band) - lake_set - sea_set
+            lake_field = [0.0] * (res * res)
+            for c in lake_cells:
+                lake_field[c] = 1.0
+            river_field = [0.0] * (res * res)
+            for c in river_banks:
+                river_field[c] = 1.0
+            lake_field = box_blur(lake_field, res, 1)
+            river_field = box_blur(river_field, res, 1)
+            tgt = lambda _c: layer
+            print("Painting pebble layer %d: %d lake/basin + %d river-bank cell(s) "
+                  "(feathered)..." % (layer, len(lake_cells), len(river_banks)))
+            n = _paint_pass(pk, cm, res, world, half, tx, ty, river_field, tgt,
+                            {"snow", "sand"}, False, grp32)
+            n += _paint_pass(pk, cm, res, world, half, tx, ty, lake_field, tgt,
+                             {"sand"}, False, grp32)
+            print("  painted %d pebble texel(s)." % n)
 
+        if despeckle:
+            print("De-speckling isolated control-map texels (gentle cleanup)...")
+            d = despeckle_base(pk, cm, grp32)
+            print("  cleaned %d isolated texel(s)." % d)
+
+        cm.write_all_packed(pk)
         cm.save(control_path)
         print("Saved %s. (EXR is the source the streamer loads; the .png twin is left "
               "untouched / now stale.)" % control_path)

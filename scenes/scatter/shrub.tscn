@@ -1,0 +1,56 @@
+; ============================================================================
+; shrub.tscn — placeholder low bush/shrub for GRASS terrain.
+; A two-lobe green blob near, billboard far. Pivot at the base.
+; ============================================================================
+[gd_scene load_steps=6 format=3 uid="uid://oscat0shrub001"]
+
+[sub_resource type="SphereMesh" id="m_lobe"]
+radius = 0.5
+height = 0.8
+radial_segments = 8
+rings = 4
+
+[sub_resource type="StandardMaterial3D" id="mat_leaf"]
+albedo_color = Color(0.2, 0.34, 0.14, 1)
+roughness = 1.0
+
+[sub_resource type="SphereMesh" id="m_lobe2"]
+radius = 0.38
+height = 0.62
+radial_segments = 7
+rings = 4
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(1.1, 0.85)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.22, 0.36, 0.15, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="Shrub" type="Node3D"]
+
+[node name="Near_A" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.36, 0)
+visibility_range_end = 40.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_lobe")
+material_override = SubResource("mat_leaf")
+
+[node name="Near_B" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.32, 0.46, 0.12)
+visibility_range_end = 40.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_lobe2")
+material_override = SubResource("mat_leaf")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.42, 0)
+visibility_range_begin = 36.0
+visibility_range_begin_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")

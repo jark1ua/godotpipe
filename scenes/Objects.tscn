@@ -1,0 +1,200 @@
+; ============================================================================
+; Objects.tscn — drop-in scattered world objects over the streamed terrain.
+; A Node3D running terrain/ObjectScatterer.gd, pre-populated with a starter set of
+; ScatterKind resources (terrain/ScatterKind.gd), each pointing at a placeholder LOD
+; scene under scenes/scatter/ (trees reuse scenes/lod_tree.tscn). Instance it next to
+; your TerrainStreamer and set Player Path. Replace each kind's `scene` with your real
+; model (keep the visibility_range LOD wiring) and retune density/scale in the inspector.
+;
+; Biome routing (control-map groups): small rocks -> gravel/pebble, boulders -> rock,
+; snowy boulders -> snow, trees -> grass+forest, shrubs -> grass, logs+mushrooms ->
+; forest, reeds -> the waterline (placement water_edge), driftwood -> sand.
+; ============================================================================
+[gd_scene load_steps=23 format=3 uid="uid://dobjects0scene1"]
+
+[ext_resource type="Script" path="res://terrain/ObjectScatterer.gd" id="1_scat"]
+[ext_resource type="Script" path="res://terrain/ScatterKind.gd" id="2_kind"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/rock_small.tscn" id="3_rock"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/boulder_med.tscn" id="4_bmed"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/boulder_large.tscn" id="5_blrg"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/boulder_snowy.tscn" id="6_bsnw"]
+[ext_resource type="PackedScene" path="res://scenes/lod_tree.tscn" id="7_tree"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/shrub.tscn" id="8_shrub"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/log.tscn" id="9_log"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/reeds.tscn" id="10_reeds"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/driftwood.tscn" id="11_drift"]
+[ext_resource type="PackedScene" path="res://scenes/scatter/mushrooms.tscn" id="12_mush"]
+
+[sub_resource type="Resource" id="k_rock"]
+script = ExtResource("2_kind")
+name = "small rock"
+scene = ExtResource("3_rock")
+groups = PackedStringArray("gravel")
+density = 55
+min_scale = 0.55
+max_scale = 1.3
+max_slope_deg = 40.0
+align_to_normal = 0.35
+random_yaw = true
+y_offset = 0.04
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 1
+
+[sub_resource type="Resource" id="k_bmed"]
+script = ExtResource("2_kind")
+name = "medium boulder"
+scene = ExtResource("4_bmed")
+groups = PackedStringArray("rock")
+density = 16
+min_scale = 0.7
+max_scale = 1.5
+max_slope_deg = 46.0
+align_to_normal = 0.2
+random_yaw = true
+y_offset = 0.12
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 2
+
+[sub_resource type="Resource" id="k_blrg"]
+script = ExtResource("2_kind")
+name = "large boulder"
+scene = ExtResource("5_blrg")
+groups = PackedStringArray("rock")
+density = 7
+min_scale = 0.7
+max_scale = 1.6
+max_slope_deg = 48.0
+align_to_normal = 0.15
+random_yaw = true
+y_offset = 0.2
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 3
+
+[sub_resource type="Resource" id="k_bsnw"]
+script = ExtResource("2_kind")
+name = "snowy boulder"
+scene = ExtResource("6_bsnw")
+groups = PackedStringArray("snow")
+density = 12
+min_scale = 0.7
+max_scale = 1.5
+max_slope_deg = 46.0
+align_to_normal = 0.2
+random_yaw = true
+y_offset = 0.12
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 4
+
+[sub_resource type="Resource" id="k_tree"]
+script = ExtResource("2_kind")
+name = "tree"
+scene = ExtResource("7_tree")
+groups = PackedStringArray("grass", "forest")
+density = 26
+min_scale = 0.8
+max_scale = 1.5
+max_slope_deg = 30.0
+align_to_normal = 0.08
+random_yaw = true
+y_offset = 0.0
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 5
+
+[sub_resource type="Resource" id="k_shrub"]
+script = ExtResource("2_kind")
+name = "shrub"
+scene = ExtResource("8_shrub")
+groups = PackedStringArray("grass")
+density = 40
+min_scale = 0.6
+max_scale = 1.4
+max_slope_deg = 34.0
+align_to_normal = 0.25
+random_yaw = true
+y_offset = 0.05
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 6
+
+[sub_resource type="Resource" id="k_log"]
+script = ExtResource("2_kind")
+name = "log"
+scene = ExtResource("9_log")
+groups = PackedStringArray("forest")
+density = 8
+min_scale = 0.7
+max_scale = 1.3
+max_slope_deg = 26.0
+align_to_normal = 0.3
+random_yaw = true
+y_offset = 0.0
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 7
+
+[sub_resource type="Resource" id="k_reeds"]
+script = ExtResource("2_kind")
+name = "reeds"
+scene = ExtResource("10_reeds")
+groups = PackedStringArray()
+density = 40
+min_scale = 0.7
+max_scale = 1.4
+max_slope_deg = 20.0
+align_to_normal = 0.1
+random_yaw = true
+y_offset = 0.0
+placement = "water_edge"
+avoid_water = false
+water_band = 1.4
+seed_offset = 8
+
+[sub_resource type="Resource" id="k_drift"]
+script = ExtResource("2_kind")
+name = "driftwood"
+scene = ExtResource("11_drift")
+groups = PackedStringArray("sand")
+density = 10
+min_scale = 0.7
+max_scale = 1.4
+max_slope_deg = 24.0
+align_to_normal = 0.25
+random_yaw = true
+y_offset = 0.05
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 9
+
+[sub_resource type="Resource" id="k_mush"]
+script = ExtResource("2_kind")
+name = "mushrooms"
+scene = ExtResource("12_mush")
+groups = PackedStringArray("forest")
+density = 14
+min_scale = 0.7
+max_scale = 1.5
+max_slope_deg = 30.0
+align_to_normal = 0.2
+random_yaw = true
+y_offset = 0.0
+placement = "land"
+avoid_water = true
+water_band = 1.2
+seed_offset = 10
+
+[node name="Objects" type="Node3D"]
+script = ExtResource("1_scat")
+kinds = [SubResource("k_rock"), SubResource("k_bmed"), SubResource("k_blrg"), SubResource("k_bsnw"), SubResource("k_tree"), SubResource("k_shrub"), SubResource("k_log"), SubResource("k_reeds"), SubResource("k_drift"), SubResource("k_mush")]

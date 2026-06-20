@@ -1,0 +1,59 @@
+; ============================================================================
+; boulder_large.tscn — placeholder LARGE boulder for ROCK terrain.
+; 3 LODs: high-poly near (more ngons than boulder_med), low-poly mid, billboard
+; far. Pivot at the base. Bigger + denser segments so the kinds read distinct.
+; ============================================================================
+[gd_scene load_steps=6 format=3 uid="uid://oscat0bouldlrg"]
+
+[sub_resource type="SphereMesh" id="m_near"]
+radius = 1.85
+height = 2.9
+radial_segments = 16
+rings = 9
+
+[sub_resource type="StandardMaterial3D" id="mat_rock"]
+albedo_color = Color(0.44, 0.42, 0.4, 1)
+roughness = 1.0
+
+[sub_resource type="SphereMesh" id="m_mid"]
+radius = 1.9
+height = 2.9
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(3.9, 3.1)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.43, 0.41, 0.39, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="BoulderLarge" type="Node3D"]
+
+[node name="Near" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.3, 0)
+visibility_range_end = 90.0
+visibility_range_end_margin = 16.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_near")
+material_override = SubResource("mat_rock")
+
+[node name="Mid" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.3, 0)
+visibility_range_begin = 82.0
+visibility_range_begin_margin = 16.0
+visibility_range_end = 180.0
+visibility_range_end_margin = 30.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_mid")
+material_override = SubResource("mat_rock")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.55, 0)
+visibility_range_begin = 170.0
+visibility_range_begin_margin = 30.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")

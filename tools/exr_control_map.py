@@ -18,6 +18,7 @@ The predictor/reorder pair is OpenEXR's Imf::Zip (validated against the real fil
 checking the decoded base-layer ids land in 0..31 and match the layer manifest).
 """
 
+import array
 import struct
 import zlib
 
@@ -137,6 +138,43 @@ class ControlMapEXR:
         pos = row_in_block * self.row_bytes + self.r_off + x * 4
         v = struct.unpack_from("<f", self._block_raw(bi), pos)[0]
         return int(round(v * 65535.0))
+
+    def read_all_packed(self):
+        """Decode the whole R channel into a flat list of packed ints (len W*H), so a
+        caller can process every texel in memory (per-texel get_packed over millions of
+        texels is far too slow). R floats are bulk-read a scanline at a time via array."""
+        W, H = self.W, self.H
+        rb, ro = self.row_bytes, self.r_off
+        out = [0] * (W * H)
+        for bi in range(self.nblocks):
+            buf = self._block_raw(bi)
+            y0 = bi * self.rows_per_block
+            nrows = min(self.rows_per_block, H - y0)
+            for r in range(nrows):
+                a = array.array("f")
+                base = r * rb + ro
+                a.frombytes(bytes(buf[base:base + W * 4]))
+                row = (y0 + r) * W
+                for x in range(W):
+                    out[row + x] = int(a[x] * 65535.0 + 0.5)
+        return out
+
+    def write_all_packed(self, packed):
+        """Write a flat list of packed ints (len W*H) back into the R channel, a scanline
+        at a time. Marks every block decoded so save() re-encodes them (the no-edit
+        round-trip is byte-clean, so re-encoding untouched blocks is safe)."""
+        W, H = self.W, self.H
+        rb, ro = self.row_bytes, self.r_off
+        inv = 1.0 / 65535.0
+        for bi in range(self.nblocks):
+            buf = self._block_raw(bi)
+            y0 = bi * self.rows_per_block
+            nrows = min(self.rows_per_block, H - y0)
+            for r in range(nrows):
+                row = (y0 + r) * W
+                a = array.array("f", [packed[row + x] * inv for x in range(W)])
+                base = r * rb + ro
+                buf[base:base + W * 4] = a.tobytes()
 
     def save(self, path):
         out = bytearray(self.header_bytes)

@@ -1,0 +1,44 @@
+; ============================================================================
+; rock_small.tscn — placeholder small light rock for PEBBLE/gravel terrain.
+; 2 LODs: a faceted near pebble, then a billboard quad far. Pivot at the base
+; (y≈0) so it sits on the ground. Swap the meshes for your asset; keep the
+; visibility_range LOD wiring (see scenes/lod_tree.tscn for the pattern).
+; ============================================================================
+[gd_scene load_steps=5 format=3 uid="uid://oscat0rocksml1"]
+
+[sub_resource type="SphereMesh" id="m_near"]
+radius = 0.26
+height = 0.42
+radial_segments = 7
+rings = 4
+
+[sub_resource type="StandardMaterial3D" id="mat_rock"]
+albedo_color = Color(0.66, 0.64, 0.6, 1)
+roughness = 1.0
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(0.55, 0.42)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.64, 0.62, 0.58, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="RockSmall" type="Node3D"]
+
+[node name="Near" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.18, 0)
+visibility_range_end = 45.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_near")
+material_override = SubResource("mat_rock")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.21, 0)
+visibility_range_begin = 40.0
+visibility_range_begin_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")

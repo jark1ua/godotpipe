@@ -1,0 +1,57 @@
+; ============================================================================
+; log.tscn — placeholder fallen log + stump for FOREST terrain.
+; The log cylinder is laid along X (rotate 90° about Z). A short upright stump
+; sits beside it. 2 LODs (near mesh, billboard far). Pivot at the base.
+; ============================================================================
+[gd_scene load_steps=6 format=3 uid="uid://oscat0log00001"]
+
+[sub_resource type="CylinderMesh" id="m_log"]
+top_radius = 0.22
+bottom_radius = 0.24
+height = 2.6
+radial_segments = 8
+
+[sub_resource type="StandardMaterial3D" id="mat_wood"]
+albedo_color = Color(0.36, 0.24, 0.14, 1)
+roughness = 1.0
+
+[sub_resource type="CylinderMesh" id="m_stump"]
+top_radius = 0.26
+bottom_radius = 0.3
+height = 0.5
+radial_segments = 8
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(2.6, 0.7)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.35, 0.23, 0.14, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="Log" type="Node3D"]
+
+[node name="Near_Log" type="MeshInstance3D" parent="."]
+transform = Transform3D(0, -1, 0, 1, 0, 0, 0, 0, 1, 0, 0.24, 0)
+visibility_range_end = 70.0
+visibility_range_end_margin = 12.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_log")
+material_override = SubResource("mat_wood")
+
+[node name="Near_Stump" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0, 0.25, 0.55)
+visibility_range_end = 70.0
+visibility_range_end_margin = 12.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_stump")
+material_override = SubResource("mat_wood")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.35, 0)
+visibility_range_begin = 64.0
+visibility_range_begin_margin = 12.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")

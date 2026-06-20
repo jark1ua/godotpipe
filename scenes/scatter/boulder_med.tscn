@@ -1,0 +1,60 @@
+; ============================================================================
+; boulder_med.tscn — placeholder MEDIUM boulder for ROCK terrain.
+; 3 LODs: medium-poly near, low-poly mid, billboard far. Pivot at the base.
+; "Varying ngon sizes" across the boulder kinds is the mesh segment counts:
+; this one is the mid-detail boulder (see boulder_large.tscn for the heavier one).
+; ============================================================================
+[gd_scene load_steps=6 format=3 uid="uid://oscat0bouldmed"]
+
+[sub_resource type="SphereMesh" id="m_near"]
+radius = 0.95
+height = 1.5
+radial_segments = 9
+rings = 5
+
+[sub_resource type="StandardMaterial3D" id="mat_rock"]
+albedo_color = Color(0.48, 0.46, 0.43, 1)
+roughness = 1.0
+
+[sub_resource type="SphereMesh" id="m_mid"]
+radius = 0.98
+height = 1.5
+radial_segments = 6
+rings = 3
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(2.0, 1.6)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.47, 0.45, 0.42, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="BoulderMed" type="Node3D"]
+
+[node name="Near" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.66, 0)
+visibility_range_end = 60.0
+visibility_range_end_margin = 12.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_near")
+material_override = SubResource("mat_rock")
+
+[node name="Mid" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.66, 0)
+visibility_range_begin = 55.0
+visibility_range_begin_margin = 12.0
+visibility_range_end = 120.0
+visibility_range_end_margin = 20.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_mid")
+material_override = SubResource("mat_rock")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+visibility_range_begin = 112.0
+visibility_range_begin_margin = 20.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")

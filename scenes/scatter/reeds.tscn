@@ -1,0 +1,56 @@
+; ============================================================================
+; reeds.tscn — placeholder reeds/cattails for the WATERLINE (lake/river edge).
+; Scattered by ObjectScatterer with placement "water_edge". A few thin upright
+; blades near, billboard far. Pivot at the base. Swap for a reed-clump model.
+; ============================================================================
+[gd_scene load_steps=5 format=3 uid="uid://oscat0reeds001"]
+
+[sub_resource type="BoxMesh" id="m_blade"]
+size = Vector3(0.05, 1.3, 0.05)
+
+[sub_resource type="StandardMaterial3D" id="mat_reed"]
+albedo_color = Color(0.42, 0.46, 0.2, 1)
+roughness = 1.0
+
+[sub_resource type="QuadMesh" id="m_far"]
+size = Vector2(0.9, 1.3)
+
+[sub_resource type="StandardMaterial3D" id="mat_far"]
+albedo_color = Color(0.42, 0.46, 0.2, 1)
+shading_mode = 0
+billboard_mode = 1
+billboard_keep_scale = true
+
+[node name="Reeds" type="Node3D"]
+
+[node name="Near_A" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, 0)
+visibility_range_end = 45.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_blade")
+material_override = SubResource("mat_reed")
+
+[node name="Near_B" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.94, 0.0, 0.34, 0.0, 1, 0.0, -0.34, 0.0, 0.94, 0.14, 0.62, 0.1)
+visibility_range_end = 45.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_blade")
+material_override = SubResource("mat_reed")
+
+[node name="Near_C" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.94, 0.0, -0.34, 0.0, 1, 0.0, 0.34, 0.0, 0.94, -0.12, 0.6, 0.13)
+visibility_range_end = 45.0
+visibility_range_end_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_blade")
+material_override = SubResource("mat_reed")
+
+[node name="Far_Billboard" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, 0)
+visibility_range_begin = 40.0
+visibility_range_begin_margin = 8.0
+visibility_range_fade_mode = 1
+mesh = SubResource("m_far")
+material_override = SubResource("mat_far")
