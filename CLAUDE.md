@@ -197,16 +197,35 @@ available mid-session if `.mcp.json` changed during it.
 - Each layer has a **`group`** in `terrain/control_map_layers.json`
   (grass/rock/snow/sand/forest/gravel/wet/special). Select terrain "of a type" by
   group, not by channel. Grass = indices 5–9; pebble = `pebble_field` (21).
-- **UV/orientation convention shared by control map, splatmap and water masks:**
-  `u=(world_x+3000)/6000` (east+), `v=(3000−world_z)/6000`, image **row 0 = south
-  (+Z)**. Chunk index: `j=round(x/step)+center`, `i=round(−z/step)+center`
-  (`step≈193.55`, `center=15`, world 6000²). Reuse this everywhere — getting `v`
-  flipped silently mirrors your data north/south.
-- A layer's textures live in `terrain/arrays/layers/<NN_name>/{albedo,normal,height,
-  ao,rough}.png`, falling back to `arrays/sets/<group>/`. Many layers (incl. 21
-  pebble_field) are **placeholders pointing at another set** until you bake real
-  PBR — so a freshly-assigned layer may *look* like rock/grass until its textures
-  are dropped in.
+- **Orientation: the control map and the water tool use OPPOSITE `v` conventions — this
+  cost two sessions.** The TERRAIN samples the control map at the **chunk mesh UVs**,
+  which run `u=(world_x+3000)/6000` (east+), **`v=(world_z+3000)/6000`** — so the
+  control-map texture **row 0 = NORTH (−Z)**. *Verify this empirically from a chunk GLB's
+  `TEXCOORD_0`, never from a comment:* `Chunk_00_00` @ z=+2903 → v≈1, `Chunk_30_30` @
+  z=−2903 → v≈0. The water tool's own heightfield/mask grid instead uses
+  `v=(3000−world_z)/6000` (**row 0 = south, +Z**); that's fine *internally* because it
+  both writes and reads its own masks the same way. **But when you PAINT the control map
+  (pebble shores, etc.) you MUST use the chunk-UV convention (row 0 = north), or the paint
+  lands mirrored north↔south and lines up with nothing** — `paint_control_map` does this;
+  the water masks deliberately do NOT (they're a separate, self-consistent texture).
+  Chunk index: `j=round(x/step)+center`, `i=round(−z/step)+center` (`step≈193.55`,
+  `center=15`, world 6000²).
+- **General trap — a self-consistent subsystem hides coordinate bugs.** The water masks
+  rendered perfectly all along (writer and reader share a frame), which made the lake
+  geometry *look* correct and pointed suspicion at logic, not coordinates. The flip only
+  surfaced at the **cross-system handoff** (water tool → control map, sampled by the
+  terrain). When two subsystems exchange a grid/texture, test alignment in the
+  **CONSUMER's frame** (here: decode the painted control map at chunk-UV `v`, confirm
+  pebble rings the lakes), not the producer's.
+- Don't hardcode a **layer index** (e.g. pebble=21) in a generator; **resolve it by name
+  from `control_map_layers.json`** (`build_water_bodies.resolve_pebble_layer`). The
+  manifest gets re-uploaded/re-numbered, and a stale constant silently paints the wrong
+  layer.
+- A layer's textures resolve **per-layer dir FIRST**
+  (`terrain/arrays/layers/<NN_name>/{albedo,normal,height,ao,rough}.png`), then fall back
+  to `arrays/sets/<texture_set>/`. So the manifest's `is_placeholder`/`texture_set` can be
+  **stale**: if the per-layer dir has real PNGs (e.g. `21_pebble_field/` does), that is
+  what renders regardless of the flag — check the dir on disk, not the JSON.
 
 ### Editing the control-map EXR in pure Python (`tools/exr_control_map.py`)
 - The env has **no numpy / OpenEXR / PIL**, and the control map is a **ZIP
@@ -223,6 +242,19 @@ available mid-session if `.mcp.json` changed during it.
   **don't rely on a 16-bit PNG round-tripping through Godot's importer** (it can
   truncate to 8-bit and zero the low byte — that's why the project uses EXR). When
   you edit the control map, edit the EXR and note the PNG twin goes stale.
+- **The pebble paint only ADDS (sets texels to pebble); it never reverts.** So re-running
+  it on an already-painted EXR *accumulates* stale shores from the old logic. Always
+  **restore the pre-paint EXR from git first** (`git show <commit-before-paint>:terrain/
+  terrain_control_map.exr`), then re-paint — `build_water_bodies.py --paint-control-map`
+  expects an unpainted base. (Caveat: this restore discards any *manual* EXR edits made
+  after that commit; if the artist hand-painted the control map, reconcile first.)
+- **`get_pixel()` throws on a compressed `Image`.** A mask/texture loaded via
+  `tex.get_image()` comes back VRAM/lossless-compressed; call `img.decompress()` once
+  before any `get_pixel()` (WaterMap does this for the lake masks — otherwise it spams
+  "Can't get_pixel() on compressed image" once per query).
+- **GDScript `:=` can't infer a type from a Dictionary subscript** (it's `Variant`):
+  `var u := dict["k"] - x` errors. Annotate explicitly (`var u: float = …`) or wrap
+  (`float(dict["k"])`).
 
 ### Streamed world ⇒ do global calculations OFFLINE from the chunk GLBs
 - Because the terrain streams, **no runtime moment holds the whole heightfield.**
@@ -261,6 +293,36 @@ available mid-session if `.mcp.json` changed during it.
   layers, so painting shore/river bands to a non-grass layer (pebble) in the control
   map *automatically* stops grass there — no extra exclusion code. Prefer making one
   source of truth (the control map) drive both look and behaviour.
+- **Making a flat plane read as 3-D water (`shaders/water_body.gdshader`) — no physics
+  needed.** Depth-fade + screen-texture refraction + shoreline foam are *volume* cues, but
+  they don't stop it looking 2-D at grazing angles. What sells a 3-D surface side-on is a
+  **rippled, REFLECTIVE** surface: multi-octave animated ripples with an **analytic
+  per-fragment normal** (independent of the coarse plane tessellation), **Fresnel sky
+  reflection** (rippled by that normal), and an **additive sun glint** (via `EMISSION`, so
+  it survives regardless of scene lights). Reconstruct scene depth with
+  `INV_PROJECTION_MATRIX` (reverse-Z: sky depth = 0, guard with `step`).
+- **Rivers are the hard case and need their own path.** A river ribbon sits ~0.3 m above
+  the terrain, so its measured water column is ≈0 → the depth logic washes it to flat wet
+  rock. Detect a river (`flow_speed>0`) and give it a **fixed body depth** (stay opaque,
+  keep colour), **higher-frequency ripples** (the ocean swell wavelength ~100 m is far
+  wider than a channel, so scale freq up ~8×) scrolled **downstream**, and skip the depth
+  foam. (A flat ribbon viewed *dead* edge-on is still flat; the real cure is carving the
+  bed into the terrain export — a bigger offline job.)
+- **Basin detection must be strict or water sits in non-basins / pokes out the side**
+  (`build_water_bodies.py`): (a) **split connected water by spill level** (Priority-Flood
+  gives one pit a single spill; an 8-connected blob can merge two pits at different levels,
+  and a single flat plane at `max(spill)` then floats above the lower rim — connect only
+  within `--level-tol`, take the level as `min(spill)`); (b) require real **`--min-depth`**
+  (a 0.5 m film over a noisy max-pooled cell isn't a lake); (c) a **containment** gate
+  (reject if too much of the rim is below the level — it would drain).
+- **The flush shore tuck-under must be terrain-AWARE.** Running the lake plane a couple
+  cells under the rising shore (so it reads flush, like the sea under the coast) is good —
+  but a plain all-direction dilate crosses a thin ridge/lip and the flat plane pokes out
+  the **lower** ground beyond. Keep the flush (don't cap how far *above* the level you tuck)
+  but add ONE check: only step into a cell while `height >= level − shore_eps`; the moment
+  terrain drops back below the water level (the lip's far side) **stop**. Grow the pebble
+  shore from this rendered footprint *outward* so the band lands on dry land (visible), not
+  under the water plane.
 
 ### Dense scatter without runtime mesh churn (`terrain/GrassScatterer.gd`)
 - For thousands of instances (grass), use a **`MultiMesh` per chunk** and **pool the
