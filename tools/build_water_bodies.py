@@ -48,11 +48,16 @@ can't poke out the side.
 Usage
 -----
     python3 tools/build_water_bodies.py [--res 512] [--sea 0.0] [--min-area 16]
-        [--min-depth 3.0] [--level-tol 0.6] [--open-frac 0.12] [--shore-dilate 2]
-        [--river-threshold 650] [--river-min-points 10] [--paint-control-map]
-        [--pebble-band 3] [--river-band 1] [--pebble-layer 21]
+        [--min-depth 3.0] [--level-tol 0.6] [--open-frac 0.08] [--shore-dilate 2]
+        [--shore-eps 0.5] [--river-threshold 650] [--river-min-points 10]
+        [--paint-control-map] [--pebble-band 4] [--river-band 2]
+        [--pebble-layer -1 (auto from manifest)] [--layer-manifest FILE]
         [--chunks DIR] [--manifest FILE] [--out FILE] [--masks DIR]
         [--control-map terrain/terrain_control_map.exr]
+
+Note: the control map is painted in the chunk-UV convention (row 0 = NORTH, -Z) so the
+pebble lands where the TERRAIN samples it; this differs from the water tool's own mask grid
+(row 0 = south), which is fine because the tool both writes and reads the masks.
 """
 
 import array
@@ -301,18 +306,19 @@ def dilate(cells, res, n):
     return s
 
 
-def shore_band_dilate(cells, height, res, level, steps, rise_max, drop_max):
-    """Terrain-AWARE version of dilate for the rendered/queried water mask.
+def shore_band_dilate(cells, height, res, level, steps, shore_eps):
+    """Terrain-AWARE shore tuck-under for the rendered/queried water mask.
 
-    A plain dilate grows the flat water plane outward in every direction so it tucks under
-    the rising shore (flush, no rim gap). But across a thin ridge/lip it would cross to the
-    LOWER ground on the far side, and the flat plane then pokes out there ("water comes out
-    the other side"). So here we only step into a neighbour whose terrain sits in the SHORE
-    BAND around the water level — `level - drop_max <= height <= level + rise_max`. That
-    tucks the plane under the immediate low shore but stops dead at a ridge (too high) and
-    never leaks into a lower basin/valley beyond it (too low)."""
-    lo = level - drop_max
-    hi = level + rise_max
+    KEEPS the flush trick — run the flat water plane a little way UP INTO the rising shore
+    so the shore occludes the plane edge and it reads flush (no rim gap), exactly like the
+    sea plane running under the coast. The ONLY thing it adds is the far-side check you
+    asked for: it steps into a neighbour only while the terrain there is at/above the water
+    level (`height >= level - shore_eps`) — i.e. genuine rising shore. The moment the
+    terrain drops back BELOW the water level (a ridge crest giving way to lower ground on
+    the far side, or a separate lower basin) it stops, so the plane can never spill over a
+    lip and poke out the other side. `steps` bounds how far it tucks (so a tall cliff face
+    doesn't drag the plane all the way up the mountain)."""
+    lo = level - shore_eps
     s = set(cells)
     frontier = set(cells)
     for _ in range(max(0, steps)):
@@ -327,7 +333,7 @@ def shore_band_dilate(cells, height, res, level, steps, rise_max, drop_max):
                     ny, nx = y + dy, x + dx
                     if 0 <= ny < res and 0 <= nx < res:
                         nidx = ny * res + nx
-                        if nidx not in s and lo <= height[nidx] <= hi:
+                        if nidx not in s and height[nidx] >= lo:
                             s.add(nidx)
                             nxt.add(nidx)
         frontier = nxt
@@ -443,7 +449,14 @@ def extract_rivers(acc, height, down, res, sea_level, threshold, lake_set, world
 def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer):
     """Stamp `pebble_layer` into the control-map EXR for every world cell in
     pebble_cells (a set of 512-grid indices). Each coarse cell covers a few control
-    texels; we set them to a solid pebble (base=layer, overlay=0, blend=0)."""
+    texels; we set them to a solid pebble (base=layer, overlay=0, blend=0).
+
+    CRITICAL — texel row convention. The TERRAIN samples the control map at the chunk mesh
+    UVs, and those run u=(world_x+half)/world, v=(world_z+half)/world, i.e. control-map
+    ROW 0 = NORTH (-Z). We MUST paint in that same convention or the pebble lands mirrored
+    north<->south and never coincides with the water. (This is independent of the water
+    tool's own heightfield/mask grid, which is row 0 = south but is self-consistent because
+    the tool both writes AND reads the masks.)"""
     import exr_control_map
     cm = exr_control_map.ControlMapEXR(control_path)
     cw, ch = cm.W, cm.H
@@ -453,7 +466,8 @@ def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer
         return max(0, min(cw - 1, int(round((wx + half) / world * (cw - 1)))))
 
     def ty(wz):
-        return max(0, min(ch - 1, int(round((half - wz) / world * (ch - 1)))))
+        # row 0 = north, matching the chunk UVs the terrain shader samples with.
+        return max(0, min(ch - 1, int(round((wz + half) / world * (ch - 1)))))
 
     packed = pebble_layer & 0x7FFF   # base = pebble, overlay 0, blend 0 -> pure pebble
     painted = 0
@@ -464,9 +478,9 @@ def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer
         wz = half - gy / (res - 1) * world
         x0 = tx(wx - cell_m * 0.5)
         x1 = tx(wx + cell_m * 0.5)
-        # z grows south; ty() is inverted, so the +z edge maps to the smaller row.
-        y0 = ty(wz + cell_m * 0.5)
-        y1 = ty(wz - cell_m * 0.5)
+        ya = ty(wz - cell_m * 0.5)
+        yb = ty(wz + cell_m * 0.5)
+        y0, y1 = (ya, yb) if ya <= yb else (yb, ya)
         for ty_ in range(y0, y1 + 1):
             for tx_ in range(x0, x1 + 1):
                 cm.set_packed(tx_, ty_, packed)
@@ -490,6 +504,26 @@ def write_gray_png(path, w, h, rows):
                 + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
 
 
+def resolve_pebble_layer(layer_manifest_path, fallback=21):
+    """Find the control-map layer index to paint as shore. Looks up the layer named
+    'pebble_field' in control_map_layers.json, else the first layer in the 'gravel' group,
+    else `fallback`. Reading it from the manifest keeps the paint correct even if the layer
+    indices are re-numbered (which is why a hardcoded 21 can silently target the wrong
+    layer if the manifest changes)."""
+    try:
+        m = json.load(open(layer_manifest_path))
+        layers = m["layers"] if isinstance(m, dict) else m
+    except Exception:
+        return fallback
+    by_name = {l.get("name"): l.get("index") for l in layers}
+    if by_name.get("pebble_field") is not None:
+        return int(by_name["pebble_field"])
+    for l in layers:
+        if l.get("group") == "gravel" and l.get("index") is not None:
+            return int(l["index"])
+    return fallback
+
+
 def main(argv):
     res = 512
     sea_level = 0.0
@@ -500,11 +534,10 @@ def main(argv):
     open_frac = 0.08          # reject a basin if more than this fraction of its rim is
     rim_open_min = 2          # below water level (would spill); always allow a small pour
     rim_eps = 0.4             # how far below level a rim cell must be to count as "open"
-    shore_rise = 2.0          # mask tucks under shore cells up to this far ABOVE level (m)
-    shore_drop = 1.0          # ...and no further than this BELOW it, so it can't cross a
-                              # ridge into lower ground on the far side (the overflow bug)
+    shore_eps = 0.5           # tuck under shore while terrain stays within this of the water
+                              # level; once it drops further BELOW (a lip's far side) -> stop
     lake_above_sea = 1.0
-    shore_dilate = 2          # max cells the (terrain-aware) shore tuck-under may grow
+    shore_dilate = 2          # max cells the shore tuck-under may grow (flush headroom)
     river_threshold = 650      # upstream cells before a flow line is a river (higher than
                                # before: 220 painted the whole drainage net as pebble lines)
     river_min_points = 10      # drop short stub channels (render + pebble)
@@ -515,7 +548,9 @@ def main(argv):
     pebble_band = 4            # pebble shore width (cells) OUTSIDE the rendered water edge,
                               # so it forms a visible band around the water, not under it
     river_band = 2            # pebble bank on each side of a river channel (cells)
-    pebble_layer = 21          # control-map layer index to stamp (21 = pebble_field)
+    pebble_layer = -1          # control-map layer to stamp; -1 = auto-detect "pebble_field"
+                               # (or the first 'gravel' group) from control_map_layers.json
+    layer_manifest = "terrain/control_map_layers.json"
     chunks_dir = "terrain/chunks"
     manifest_path = "terrain/terrain_manifest.json"
     out_path = "terrain/water_bodies.json"
@@ -532,14 +567,14 @@ def main(argv):
         elif t == "--level-tol": i += 1; level_tol = float(a[i])
         elif t == "--open-frac": i += 1; open_frac = float(a[i])
         elif t == "--shore-dilate": i += 1; shore_dilate = int(a[i])
-        elif t == "--shore-rise": i += 1; shore_rise = float(a[i])
-        elif t == "--shore-drop": i += 1; shore_drop = float(a[i])
+        elif t == "--shore-eps": i += 1; shore_eps = float(a[i])
         elif t == "--river-threshold": i += 1; river_threshold = int(a[i])
         elif t == "--river-min-points": i += 1; river_min_points = int(a[i])
         elif t == "--paint-control-map": paint_cm = True
         elif t == "--pebble-band": i += 1; pebble_band = int(a[i])
         elif t == "--river-band": i += 1; river_band = int(a[i])
         elif t == "--pebble-layer": i += 1; pebble_layer = int(a[i])
+        elif t == "--layer-manifest": i += 1; layer_manifest = a[i]
         elif t == "--chunks": i += 1; chunks_dir = a[i]
         elif t == "--manifest": i += 1; manifest_path = a[i]
         elif t == "--out": i += 1; out_path = a[i]
@@ -608,8 +643,7 @@ def main(argv):
         # basin_level_and_containment); the rendered/queried mask tucks under the shore so
         # the plane sits flush (no rim gap) — but ONLY into the shore band around the water
         # level, so it can't cross a ridge/lip onto lower ground and poke out the far side.
-        mask_cells = shore_band_dilate(cells, height, res, level, shore_dilate,
-                                       shore_rise, shore_drop)
+        mask_cells = shore_band_dilate(cells, height, res, level, shore_dilate, shore_eps)
         water_footprint.update(mask_cells)
         xs = [c % res for c in mask_cells]
         ys = [c // res for c in mask_cells]
@@ -669,9 +703,10 @@ def main(argv):
         lake_shore = dilate(water_footprint, res, pebble_band) - water_footprint
         river_banks = dilate(rendered_rivers, res, river_band)
         pebble_cells = (lake_shore | river_banks) - lake_set - sea_set
+        layer = pebble_layer if pebble_layer >= 0 else resolve_pebble_layer(layer_manifest)
         print("Painting pebble layer %d into %s over %d shore/bed cell(s)..." % (
-            pebble_layer, control_path, len(pebble_cells)))
-        n = paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer)
+            layer, control_path, len(pebble_cells)))
+        n = paint_control_map(control_path, pebble_cells, res, world, half, layer)
         print("Painted %d control-map texel(s). (EXR is the source the streamer loads; the "
               ".png twin is left untouched.)" % n)
     return 0
