@@ -59,6 +59,7 @@ Usage
         [--shore-eps 0.5] [--river-threshold 650] [--river-min-points 10]
         [--paint-control-map] [--pebble-band 4] [--river-band 2]
         [--loosen-rock] [--rock-slope-deg 30] [--rock-slope-soft 8] [--no-despeckle]
+        [--biomify] [--biome-res 96] [--biome-smooth 3] [--biome-warp 0.8]
         [--pebble-layer -1 (auto from manifest)] [--layer-manifest FILE]
         [--chunks DIR] [--manifest FILE] [--out FILE] [--masks DIR]
         [--control-map terrain/terrain_control_map.exr]
@@ -654,6 +655,128 @@ def nearest_biome_field(base_layer, res, grp32):
     return nearest
 
 
+def _noise_grid(n, seed):
+    """A small n*n grid of random values in [0,1) for value-noise sampling."""
+    import random
+    r = random.Random(seed)
+    return [r.random() for _ in range(n * n)]
+
+
+def _noise_sample(grid, n, u, v):
+    """Bilinear (wrapping) value-noise sample at grid coords (u, v) in [0,n)."""
+    fx = u % n
+    fy = v % n
+    x0 = int(fx); y0 = int(fy)
+    x1 = (x0 + 1) % n; y1 = (y0 + 1) % n
+    tx = fx - x0; ty = fy - y0
+    a = grid[y0 * n + x0]; b = grid[y0 * n + x1]
+    c = grid[y1 * n + x0]; d = grid[y1 * n + x1]
+    return (a * (1.0 - tx) + b * tx) * (1.0 - ty) + (c * (1.0 - tx) + d * tx) * ty
+
+
+def biomify(pk, cm, grp32, coarse_res, smooth_iters, warp_amp, protect_groups, seed=1234):
+    """Consolidate the noisy per-texel control map into COHERENT biome regions.
+
+    The base map (from Blender) assigns a layer almost per-texel, so within one biome the
+    texture flickers between sub-variants (lush vs dry vs dead grass; granite vs sandstone
+    vs slate) and rare 'marker' layers (volcanic ash, charcoal, bone) are sprinkled as
+    noise. This makes the ground read as a hodgepodge. We fix it by majority-voting the map
+    down to a coarse grid, mode-smoothing that grid so each region settles on ONE dominant
+    layer (scattered odd layers get out-voted and vanish; grass/rock variants merge into
+    patches), then upsampling back to full resolution with FEATHERED, noise-warped region
+    boundaries so the seams are organic, not blocky — and the shader height-blends them.
+
+    `protect_groups` (e.g. {"sand"}) keeps a texel's ORIGINAL layer wherever its group is
+    protected, so thin coastal sand/beaches aren't eroded by the smoothing. The water/rock
+    paint passes run AFTER this on the already-coherent map."""
+    W, H = cm.W, cm.H
+    block = max(1, W // coarse_res)
+    G = W // block                       # effective coarse resolution (W divisible by block)
+    GH = H // block
+
+    # 1. coarse dominant layer: majority vote of base ids over each block.
+    cl = [0] * (G * GH)
+    for cy in range(GH):
+        ty0 = cy * block
+        for cx in range(G):
+            tx0 = cx * block
+            cnt = {}
+            for yy in range(ty0, ty0 + block):
+                rowb = yy * W
+                for xx in range(tx0, tx0 + block):
+                    l = pk[rowb + xx] & 31
+                    cnt[l] = cnt.get(l, 0) + 1
+            cl[cy * G + cx] = max(cnt, key=cnt.get)
+
+    # 2. mode-smooth the coarse grid: each cell -> most common layer in its 3x3 (own vote
+    #    weighted so stable regions persist). Iterating grows region coherence.
+    for _ in range(max(0, smooth_iters)):
+        nl = cl[:]
+        for cy in range(GH):
+            for cx in range(G):
+                cnt = {}
+                for dy in (-1, 0, 1):
+                    ny = cy + dy
+                    if ny < 0 or ny >= GH:
+                        continue
+                    for dx in (-1, 0, 1):
+                        nx = cx + dx
+                        if nx < 0 or nx >= G:
+                            continue
+                        l = cl[ny * G + nx]
+                        cnt[l] = cnt.get(l, 0) + (3 if dx == 0 and dy == 0 else 1)
+                nl[cy * G + cx] = max(cnt, key=cnt.get)
+        cl = nl
+
+    # 3. upsample to full res with noise-warped, feathered region boundaries.
+    nx_grid = _noise_grid(96, seed)
+    ny_grid = _noise_grid(96, seed + 777)
+    nfreq = 96.0 / max(1, G) * 6.0      # ~6 noise periods per ... tuned for organic edges
+
+    def cell_layer(cx, cy):
+        if cx < 0: cx = 0
+        elif cx >= G: cx = G - 1
+        if cy < 0: cy = 0
+        elif cy >= GH: cy = GH - 1
+        return cl[cy * G + cx]
+
+    for ty_ in range(H):
+        rowb = ty_ * W
+        v_noise = ty_ * nfreq / block
+        for tx_ in range(W):
+            orig = pk[rowb + tx_]
+            if grp32[orig & 31] in protect_groups:
+                continue
+            # fractional coarse position (cell-centre aligned) + domain warp
+            wx = _noise_sample(nx_grid, 96, tx_ * nfreq / block, v_noise) - 0.5
+            wy = _noise_sample(ny_grid, 96, tx_ * nfreq / block, v_noise) - 0.5
+            cgx = (tx_ + 0.5) / block - 0.5 + wx * warp_amp
+            cgy = (ty_ + 0.5) / block - 0.5 + wy * warp_amp
+            cx0 = int(cgx) if cgx >= 0 else int(cgx) - 1
+            cy0 = int(cgy) if cgy >= 0 else int(cgy) - 1
+            fx = cgx - cx0
+            fy = cgy - cy0
+            # bilinear weight per neighbouring region layer
+            w = {}
+            for (ddx, ddy, ww) in ((0, 0, (1 - fx) * (1 - fy)), (1, 0, fx * (1 - fy)),
+                                   (0, 1, (1 - fx) * fy), (1, 1, fx * fy)):
+                l = cell_layer(cx0 + ddx, cy0 + ddy)
+                w[l] = w.get(l, 0.0) + ww
+            # base = strongest region; overlay = runner-up (the adjacent region)
+            ranked = sorted(w.items(), key=lambda kv: kv[1], reverse=True)
+            base_l = ranked[0][0]
+            if len(ranked) > 1:
+                over_l = ranked[1][0]
+                frac = ranked[1][1]               # 0..0.5 weight of the runner-up
+            else:
+                over_l = base_l
+                frac = 0.0
+            braw = int(round(min(0.5, frac) * 62.0))
+            braw = 31 if braw > 31 else braw
+            pk[rowb + tx_] = (base_l & 31) | ((over_l & 31) << 5) | (braw << 10)
+    return G, GH
+
+
 def write_gray_png(path, w, h, rows):
     def chunk(typ, data):
         return (struct.pack(">I", len(data)) + typ + data
@@ -738,6 +861,10 @@ def main(argv):
     rock_slope_deg = 30.0       # slope midpoint: 50/50 rock<->biome here (less rock below)
     rock_slope_soft = 8.0       # +/- this many deg is the soft rock<->biome transition band
     despeckle = True            # gentle cleanup of lone single-texel speckle in the base map
+    biomify_flag = False        # consolidate the noisy per-texel map into coherent biomes
+    biome_res = 96              # coarse grid for region voting (lower = chunkier biomes)
+    biome_smooth = 3            # mode-smoothing iterations (higher = larger, cleaner regions)
+    biome_warp = 0.8            # noise warp (coarse cells) so region edges wander, not blocky
     pebble_band = 4            # pebble shore width (cells) OUTSIDE the rendered water edge,
                               # so it forms a visible band around the water, not under it
     river_band = 2            # pebble bank on each side of a river channel (cells)
@@ -768,6 +895,10 @@ def main(argv):
         elif t == "--rock-slope-deg": i += 1; rock_slope_deg = float(a[i])
         elif t == "--rock-slope-soft": i += 1; rock_slope_soft = float(a[i])
         elif t == "--no-despeckle": despeckle = False
+        elif t == "--biomify": biomify_flag = True
+        elif t == "--biome-res": i += 1; biome_res = int(a[i])
+        elif t == "--biome-smooth": i += 1; biome_smooth = int(a[i])
+        elif t == "--biome-warp": i += 1; biome_warp = float(a[i])
         elif t == "--pebble-band": i += 1; pebble_band = int(a[i])
         elif t == "--river-band": i += 1; river_band = int(a[i])
         elif t == "--pebble-layer": i += 1; pebble_layer = int(a[i])
@@ -889,7 +1020,7 @@ def main(argv):
     print("Wrote %s (%d lakes, %d rivers) and %d mask(s) in %s" % (
         out_path, len(bodies), len(river_bodies), len(bodies), masks_dir))
 
-    if paint_cm or loosen_rock_flag:
+    if paint_cm or loosen_rock_flag or biomify_flag:
         import exr_control_map
         idx_group, grass_default = load_layer_groups(layer_manifest)
         grp32 = [idx_group.get(i) for i in range(32)]   # fast group lookup by base id
@@ -900,6 +1031,16 @@ def main(argv):
         # we write it back at the end. Edits FEATHER (base+overlay+blend) at full 2048
         # resolution instead of stamping pure-base 12 m squares, so boundaries read smooth.
         pk = cm.read_all_packed()
+
+        if biomify_flag:
+            # FIRST: turn the noisy per-texel hodgepodge into coherent biome regions (grass
+            # variants merge into patches, scattered sandstone/ash/charcoal/slate get
+            # out-voted and vanish), with feathered, noise-warped boundaries. Sand is
+            # protected so thin beaches survive. Rock-loosen + pebble then run on top.
+            print("Biomifying: consolidating the control map into coherent regions "
+                  "(coarse %d, smooth %d)..." % (biome_res, biome_smooth))
+            g, gh = biomify(pk, cm, grp32, biome_res, biome_smooth, biome_warp, {"sand"})
+            print("  voted a %dx%d region grid and upsampled with feathered edges." % (g, gh))
 
         if loosen_rock_flag:
             # Rock only belongs on steep ground. Feather rock -> its nearest grass/forest

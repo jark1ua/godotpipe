@@ -248,6 +248,18 @@ available mid-session if `.mcp.json` changed during it.
   Bulk-edit the EXR via `ControlMapEXR.read_all_packed()/write_all_packed()` (per-texel
   `get/set_packed` over 4M texels is far too slow). Rock-loosening is the same feather keyed
   on terrain slope; a conservative singleton de-speckle removes lone outliers.
+- **The base map is a HODGEPODGE — feathering edits is NOT enough; you must `--biomify`.**
+  The base map is already coherent at single-texel scale (0.98 neighbour agreement), so a
+  singleton de-speckle changes nothing visible. The mess the user sees is REGIONAL: ~40–90 m
+  patches of different grass variants (lush/dry/dead) and rock variants (granite/sandstone/
+  slate) and sprinkled marker layers, alternating randomly. `biomify` fixes it: majority-vote
+  the layer ids down to a coarse grid (`--biome-res`, ~96 = 62 m cells), MODE-SMOOTH that grid
+  (`--biome-smooth`, default 3) so each region settles on its dominant layer (scattered odd
+  layers get out-voted and vanish; variants merge into patches), then upsample back with
+  noise-WARPED, feathered boundaries (`--biome-warp`) so seams are organic not blocky. Measure
+  success by **regional patch diversity** (distinct layers per ~94 m window: base 2.05 →
+  ~1.5), NOT single-texel coherence. `--biomify` runs FIRST, then rock-loosen + pebble on the
+  cleaned map. `{"sand"}` is protected so thin beaches survive the smoothing.
 - The **EXR is the source the streamer loads** (`Image.load()` reads the raw file at
   full precision). The `terrain_control_map.png` twin is a 16-bit grayscale export;
   **don't rely on a 16-bit PNG round-tripping through Godot's importer** (it can
