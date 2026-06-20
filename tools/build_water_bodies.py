@@ -23,9 +23,16 @@ surface into a coarse global heightfield, then works out where water would pool:
      spill paths off the lakes/high ground down to the sea. These are traced into
      polylines (with per-vertex width) the runtime renders as flowing-water ribbons.
   5. (optional, --paint-control-map) Stamp a pebble layer into the terrain control map
-     EXR in a band around every water body (lake/sea shores + riverbeds). This makes
-     the shoreline read as pebbles AND -- because grass only spawns on grass-group
-     layers -- stops grass there automatically.
+     EXR for every water body: a band around lake/sea shores, the basin floor under each
+     lake (so the terrain under a basin reads as pebbles from the shore ring inward), and
+     a bank on each side of the rivers. Sand acts as a boundary -- the non-sand interior
+     within it fills with pebble, but sand texels are never painted over; river banks also
+     never paint over snow. This makes the shoreline/basin read as pebbles AND -- because
+     grass only spawns on grass-group layers -- stops grass there automatically.
+  6. (optional, --loosen-rock) Reclassify rock-group control-map cells on gentle slopes
+     (< --rock-slope-deg) to their surrounding grass/forest biome. Rock only belongs on
+     steep ground; this trims the over-rocky map back toward grass/forest. Per-texel, so
+     it never bleeds over adjacent sand/snow.
 
 Output
 ------
@@ -51,6 +58,7 @@ Usage
         [--min-depth 3.0] [--level-tol 0.6] [--open-frac 0.08] [--shore-dilate 2]
         [--shore-eps 0.5] [--river-threshold 650] [--river-min-points 10]
         [--paint-control-map] [--pebble-band 4] [--river-band 2]
+        [--loosen-rock] [--rock-slope-deg 30]
         [--pebble-layer -1 (auto from manifest)] [--layer-manifest FILE]
         [--chunks DIR] [--manifest FILE] [--out FILE] [--masks DIR]
         [--control-map terrain/terrain_control_map.exr]
@@ -446,21 +454,16 @@ def extract_rivers(acc, height, down, res, sea_level, threshold, lake_set, world
     return river, polylines, rendered
 
 
-def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer):
-    """Stamp `pebble_layer` into the control-map EXR for every world cell in
-    pebble_cells (a set of 512-grid indices). Each coarse cell covers a few control
-    texels; we set them to a solid pebble (base=layer, overlay=0, blend=0).
+def _texel_mappers(cm, world, half):
+    """Return (tx, ty) mapping a world (x, z) to a control-map texel column/row.
 
     CRITICAL — texel row convention. The TERRAIN samples the control map at the chunk mesh
     UVs, and those run u=(world_x+half)/world, v=(world_z+half)/world, i.e. control-map
-    ROW 0 = NORTH (-Z). We MUST paint in that same convention or the pebble lands mirrored
+    ROW 0 = NORTH (-Z). We MUST paint in that same convention or the paint lands mirrored
     north<->south and never coincides with the water. (This is independent of the water
     tool's own heightfield/mask grid, which is row 0 = south but is self-consistent because
     the tool both writes AND reads the masks.)"""
-    import exr_control_map
-    cm = exr_control_map.ControlMapEXR(control_path)
     cw, ch = cm.W, cm.H
-    cell_m = world / (res - 1)
 
     def tx(wx):
         return max(0, min(cw - 1, int(round((wx + half) / world * (cw - 1)))))
@@ -469,24 +472,139 @@ def paint_control_map(control_path, pebble_cells, res, world, half, pebble_layer
         # row 0 = north, matching the chunk UVs the terrain shader samples with.
         return max(0, min(ch - 1, int(round((wz + half) / world * (ch - 1)))))
 
+    return tx, ty
+
+
+def _cell_texel_box(cm, idx, res, world, half, tx, ty):
+    """Texel bounding box (x0, x1, y0, y1) covered by coarse cell `idx`."""
+    cell_m = world / (res - 1)
+    gx = idx % res
+    gy = idx // res
+    wx = gx / (res - 1) * world - half
+    wz = half - gy / (res - 1) * world
+    x0 = tx(wx - cell_m * 0.5)
+    x1 = tx(wx + cell_m * 0.5)
+    ya = ty(wz - cell_m * 0.5)
+    yb = ty(wz + cell_m * 0.5)
+    y0, y1 = (ya, yb) if ya <= yb else (yb, ya)
+    return x0, x1, y0, y1
+
+
+def paint_pebble_jobs(cm, jobs, res, world, half, pebble_layer, idx_group):
+    """Stamp `pebble_layer` into the (already-open) control-map EXR for a list of paint
+    jobs. Each job is (cells, forbid_groups): `cells` is a set of 512-grid indices; a
+    control texel inside one of those cells is set to solid pebble (base=layer, overlay=0,
+    blend=0) UNLESS the layer already there belongs to a forbidden group.
+
+    `forbid_groups` is how the caller honours the "don't paint over X" rules per source:
+      * river banks pass {"snow", "sand"} — pebble must not bury snowfields or sand;
+      * lake/basin cells pass {"sand"}     — sand rings the shore as a boundary, and the
+        basin interior inside that sand boundary is filled with pebble.
+    The check is PER TEXEL (not per coarse cell) so a half-sand beach keeps its sand texels
+    and only its non-sand texels turn to pebble."""
+    tx, ty = _texel_mappers(cm, world, half)
     packed = pebble_layer & 0x7FFF   # base = pebble, overlay 0, blend 0 -> pure pebble
     painted = 0
-    for idx in pebble_cells:
-        gx = idx % res
-        gy = idx // res
-        wx = gx / (res - 1) * world - half
-        wz = half - gy / (res - 1) * world
-        x0 = tx(wx - cell_m * 0.5)
-        x1 = tx(wx + cell_m * 0.5)
-        ya = ty(wz - cell_m * 0.5)
-        yb = ty(wz + cell_m * 0.5)
-        y0, y1 = (ya, yb) if ya <= yb else (yb, ya)
-        for ty_ in range(y0, y1 + 1):
-            for tx_ in range(x0, x1 + 1):
-                cm.set_packed(tx_, ty_, packed)
-                painted += 1
-    cm.save(control_path)
+    for cells, forbid in jobs:
+        for idx in cells:
+            x0, x1, y0, y1 = _cell_texel_box(cm, idx, res, world, half, tx, ty)
+            for ty_ in range(y0, y1 + 1):
+                for tx_ in range(x0, x1 + 1):
+                    if forbid:
+                        base = cm.get_packed(tx_, ty_) & 31
+                        if idx_group.get(base) in forbid:
+                            continue
+                    cm.set_packed(tx_, ty_, packed)
+                    painted += 1
     return painted
+
+
+def loosen_rock(cm, height, res, world, half, idx_group, grass_default,
+                slope_deg_keep):
+    """Convert gentle-slope rock to its surrounding grass/forest biome, in-place in the
+    (already-open) control-map EXR. Rock only really belongs on steep ground; the map had
+    too much of it, so any coarse cell whose CURRENT base layer is in the 'rock' group AND
+    whose terrain slope is below `slope_deg_keep` is reclassified to the nearest grass/
+    forest layer (so local biome — meadow vs conifer floor — is preserved rather than a
+    flat single green).
+
+    Slope comes from the offline max-pooled heightfield (central differences over the
+    coarse grid). Replacement layer is found by a multi-source BFS out from every
+    grass/forest cell, so each de-rocked cell adopts the layer id of the closest such cell;
+    cells with no biome anywhere fall back to `grass_default`."""
+    import math
+    from collections import deque
+    cell_m = world / (res - 1)
+    tan_keep = math.tan(math.radians(slope_deg_keep))
+    tx, ty = _texel_mappers(cm, world, half)
+
+    def world_x(gx):
+        return gx / (res - 1) * world - half
+
+    def world_z(gy):
+        return half - gy / (res - 1) * world
+
+    # Current base layer per coarse cell (sample the cell-centre texel).
+    base_layer = [0] * (res * res)
+    for gy in range(res):
+        for gx in range(res):
+            i = gy * res + gx
+            base_layer[i] = cm.get_packed(tx(world_x(gx)), ty(world_z(gy))) & 31
+
+    # Multi-source BFS: seed every grass/forest cell with its own layer id; propagate the
+    # nearest such id across the whole grid (so de-rocked cells can read it).
+    BIOME = ("grass", "forest")
+    nearest = [-1] * (res * res)
+    dq = deque()
+    for i in range(res * res):
+        if idx_group.get(base_layer[i]) in BIOME:
+            nearest[i] = base_layer[i]
+            dq.append(i)
+    while dq:
+        i = dq.popleft()
+        y = i // res
+        x = i % res
+        for dy, dx in _N8:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < res and 0 <= nx < res:
+                ni = ny * res + nx
+                if nearest[ni] == -1:
+                    nearest[ni] = nearest[i]
+                    dq.append(ni)
+
+    def slope_tan(x, y):
+        i = y * res + x
+        xm = height[i - 1] if x > 0 else height[i]
+        xp = height[i + 1] if x < res - 1 else height[i]
+        ym = height[i - res] if y > 0 else height[i]
+        yp = height[i + res] if y < res - 1 else height[i]
+        dzdx = (xp - xm) / (2.0 * cell_m)
+        dzdy = (yp - ym) / (2.0 * cell_m)
+        return math.sqrt(dzdx * dzdx + dzdy * dzdy)
+
+    changed = 0
+    for gy in range(res):
+        for gx in range(res):
+            i = gy * res + gx
+            if idx_group.get(base_layer[i]) != "rock":
+                continue
+            if slope_tan(gx, gy) >= tan_keep:
+                continue   # steep enough — keep it rocky
+            new_layer = nearest[i] if nearest[i] >= 0 else grass_default
+            packed = new_layer & 0x7FFF
+            x0, x1, y0, y1 = _cell_texel_box(cm, i, res, world, half, tx, ty)
+            cell_changed = False
+            for ty_ in range(y0, y1 + 1):
+                for tx_ in range(x0, x1 + 1):
+                    # Only repaint texels that are themselves rock, so the coarse cell can't
+                    # bleed over an adjacent sand/snow texel sharing its box.
+                    if idx_group.get(cm.get_packed(tx_, ty_) & 31) != "rock":
+                        continue
+                    cm.set_packed(tx_, ty_, packed)
+                    cell_changed = True
+            if cell_changed:
+                changed += 1
+    return changed
 
 
 def write_gray_png(path, w, h, rows):
@@ -502,6 +620,30 @@ def write_gray_png(path, w, h, rows):
     with open(path, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
                 + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
+
+
+def load_layer_groups(layer_manifest_path):
+    """Return (idx_group, grass_default): a {layer_index: group_name} map and the index of
+    a sensible default grass layer (first in the 'grass' group, else 5). Used by the paint
+    rules (don't-paint-over snow/sand) and the rock-loosening pass (de-rocked -> biome)."""
+    idx_group = {}
+    grass_default = 5
+    try:
+        m = json.load(open(layer_manifest_path))
+        layers = m["layers"] if isinstance(m, dict) else m
+    except Exception:
+        return idx_group, grass_default
+    first_grass = None
+    for l in layers:
+        idx = l.get("index")
+        if idx is None:
+            continue
+        idx_group[int(idx)] = l.get("group")
+        if l.get("group") == "grass" and first_grass is None:
+            first_grass = int(idx)
+    if first_grass is not None:
+        grass_default = first_grass
+    return idx_group, grass_default
 
 
 def resolve_pebble_layer(layer_manifest_path, fallback=21):
@@ -541,10 +683,12 @@ def main(argv):
     river_threshold = 650      # upstream cells before a flow line is a river (higher than
                                # before: 220 painted the whole drainage net as pebble lines)
     river_min_points = 10      # drop short stub channels (render + pebble)
-    river_min_w = 4.0
-    river_max_w = 26.0
+    river_min_w = 5.0          # rivers run a touch wider than before (was 4.0 / 26.0)
+    river_max_w = 32.0
     river_lift = 0.3           # raise the ribbon this far above the terrain sample
     paint_cm = False
+    loosen_rock_flag = False    # reclassify gentle-slope rock -> surrounding grass/forest
+    rock_slope_deg = 30.0       # terrain below this slope is too gentle to stay rock
     pebble_band = 4            # pebble shore width (cells) OUTSIDE the rendered water edge,
                               # so it forms a visible band around the water, not under it
     river_band = 2            # pebble bank on each side of a river channel (cells)
@@ -571,6 +715,8 @@ def main(argv):
         elif t == "--river-threshold": i += 1; river_threshold = int(a[i])
         elif t == "--river-min-points": i += 1; river_min_points = int(a[i])
         elif t == "--paint-control-map": paint_cm = True
+        elif t == "--loosen-rock": loosen_rock_flag = True
+        elif t == "--rock-slope-deg": i += 1; rock_slope_deg = float(a[i])
         elif t == "--pebble-band": i += 1; pebble_band = int(a[i])
         elif t == "--river-band": i += 1; river_band = int(a[i])
         elif t == "--pebble-layer": i += 1; pebble_layer = int(a[i])
@@ -692,23 +838,45 @@ def main(argv):
     print("Wrote %s (%d lakes, %d rivers) and %d mask(s) in %s" % (
         out_path, len(bodies), len(river_bodies), len(bodies), masks_dir))
 
-    if paint_cm:
-        # Pebble = a VISIBLE band of shore around the water, plus river banks. The previous
-        # version painted from the true waterline outward, so the water plane (which tucks
-        # ~shore_dilate cells under the shore) covered almost all of it and no pebble showed.
-        # Now the lake band is grown from the RENDERED water footprint (mask), so the whole
-        # pebble_band lands OUTSIDE the water plane and reads as a shore. Rivers get a bank
-        # on each side of the kept channels (not the whole D8 net). Subtract the water and
-        # sea so pebble only paints the dry/visible shore + the very shallow waterline bed.
-        lake_shore = dilate(water_footprint, res, pebble_band) - water_footprint
-        river_banks = dilate(rendered_rivers, res, river_band)
-        pebble_cells = (lake_shore | river_banks) - lake_set - sea_set
-        layer = pebble_layer if pebble_layer >= 0 else resolve_pebble_layer(layer_manifest)
-        print("Painting pebble layer %d into %s over %d shore/bed cell(s)..." % (
-            layer, control_path, len(pebble_cells)))
-        n = paint_control_map(control_path, pebble_cells, res, world, half, layer)
-        print("Painted %d control-map texel(s). (EXR is the source the streamer loads; the "
-              ".png twin is left untouched.)" % n)
+    if paint_cm or loosen_rock_flag:
+        import exr_control_map
+        idx_group, grass_default = load_layer_groups(layer_manifest)
+        cm = exr_control_map.ControlMapEXR(control_path)
+
+        if loosen_rock_flag:
+            print("Loosening rock: reclassifying rock-group cells below %.0f deg slope to "
+                  "the surrounding grass/forest..." % rock_slope_deg)
+            ch = loosen_rock(cm, height, res, world, half, idx_group, grass_default,
+                             rock_slope_deg)
+            print("  reclassified %d coarse cell(s) of gentle-slope rock." % ch)
+
+        if paint_cm:
+            # Pebble = a VISIBLE band of shore around each lake, the basin floor under it,
+            # plus river banks. The lake band is grown from the RENDERED water footprint
+            # (mask) so the shore ring lands OUTSIDE the water plane (visible), and we now
+            # ALSO paint the basin interior (the footprint itself / lake floor) — sand acts
+            # as the boundary, so everything inside that isn't sand becomes pebble.
+            #
+            # Per-source "don't paint over" rules (checked per texel in paint_pebble_jobs):
+            #   * lake shore + basin floor: forbid {sand} (sand rings the shore as a
+            #     boundary; the non-sand interior within it fills with pebble);
+            #   * river banks: forbid {snow, sand} (don't bury snowfields or sand).
+            lake_band = dilate(water_footprint, res, pebble_band)
+            lake_cells = lake_band - sea_set            # shore ring + basin floor (keep water)
+            river_banks = dilate(rendered_rivers, res, river_band) - lake_set - sea_set
+            layer = pebble_layer if pebble_layer >= 0 else resolve_pebble_layer(layer_manifest)
+            jobs = [
+                (lake_cells, {"sand"}),
+                (river_banks, {"snow", "sand"}),
+            ]
+            print("Painting pebble layer %d into %s over %d lake/basin + %d river-bank "
+                  "cell(s)..." % (layer, control_path, len(lake_cells), len(river_banks)))
+            n = paint_pebble_jobs(cm, jobs, res, world, half, layer, idx_group)
+            print("Painted %d control-map texel(s)." % n)
+
+        cm.save(control_path)
+        print("Saved %s. (EXR is the source the streamer loads; the .png twin is left "
+              "untouched / now stale.)" % control_path)
     return 0
 
 
