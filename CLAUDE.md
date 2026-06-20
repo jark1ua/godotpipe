@@ -186,6 +186,37 @@ available mid-session if `.mcp.json` changed during it.
   one run instead of many round-trips. Reach for this on the *first* sign of a
   fault you can't see directly, not the third.
 
+### Debugging VISUAL quality you can't see (you have no engine; the user verifies)
+- **Define a quantitative metric for the user's actual complaint and measure base vs
+  result — don't assume your change worked.** A texturing "fix" (feathering edits +
+  a singleton de-speckle) *looked* reasonable but changed nothing the user could see;
+  it shipped twice before measuring revealed why. Build a tiny pure-Python metric over
+  the asset and print `base -> result` so "did this do anything?" is answered with a
+  number, not a hope.
+- **Match the metric's SCALE to the complaint, and probe several scales.** The map was
+  already 0.98-coherent at single-texel scale (so de-speckle was a no-op), yet looked
+  like a hodgepodge because the mess was REGIONAL — ~40–90 m patches. The fix only became
+  obvious once the metric was "distinct layers per ~94 m window" (2.05 → 1.5), not
+  per-texel agreement. If a metric says "already fine" but the user says "broken," you're
+  measuring at the wrong scale.
+- **Sweep parameters offline against that metric before committing.** Isolate the
+  expensive sub-step (here: run `biomify()` alone, not the whole water pipeline) so you
+  can try several settings in one go, pick the knee of the curve (res=96 plateaued vs 64),
+  and ship calibrated defaults instead of a guess.
+- **On unverifiable visual work, ship tunable knobs and tell the user which way to turn
+  them.** Expose the dials as flags/exports (`--biome-res/-smooth/-warp`, scatter density)
+  and state the direction for "too much / too little," so a miscalibration is a one-line
+  retune by the user, not another full round-trip.
+- **A plausible fix that the user says "looks unchanged" usually means the DIAGNOSIS was
+  wrong, not the dose.** Go measure the real fault before re-implementing harder.
+
+### Hand-editing `.tscn`: automate the bookkeeping checks
+- After writing/editing scenes, **script the invariants instead of eyeballing them**: a
+  3-line loop that recomputes `load_steps == ext + sub + 1` per file caught 6 wrong counts
+  in one pass; another that diffs referenced vs defined `ExtResource/SubResource` ids
+  catches typos that would corrupt the scene. Cheap to run, and you can't open the editor
+  to find these the easy way.
+
 ### Terrain texturing: the 32-layer control map (NOT the old 4-channel splatmap)
 - The terrain is no longer painted by `terrain_splatmap.png` (R=grass/G=rock/B=snow/
   A=sand). That is superseded by a **32-layer control map**: `terrain/
