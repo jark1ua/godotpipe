@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "control_map": "terrain_control_map_16k.png",
+  "control_map": "terrain_control_map_16k.exr",
   "control_map_resolution": 2048,
   "control_map_bit_depth": 16,
   "world_size_m": 16000,

@@ -77,7 +77,9 @@ extends Node3D
 @export_file("*.json") var layer_manifest_path: String = "res://terrain/control_map_layers.json"
 ## 16-bit single-channel control map: base(5) | overlay(5) | blend(5) per texel.
 ## Default is the biome-baked map for the 16 km world (tools/bake_biome_control_map.py).
-@export_file var control_map_path: String = "res://terrain/terrain_control_map_16k.png"
+## MUST be .exr: a 16-bit PNG truncates to 8-bit (keeping the high byte) and zeroes
+## every low-bit-packed layer id -> base 0 (rock) everywhere.
+@export_file var control_map_path: String = "res://terrain/terrain_control_map_16k.exr"
 ## Folder of base PBR sets: <sets_dir>/<set>/{albedo,normal,height,ao,rough}.png.
 ## Used as the fallback for any layer that has no dedicated textures yet.
 @export_dir var sets_dir: String = "res://terrain/arrays/sets"
