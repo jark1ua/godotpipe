@@ -418,6 +418,36 @@ available mid-session if `.mcp.json` changed during it.
   `zlib`+CRC writer; decode by undoing the per-row filter. Keep mask textures small
   and binary (precision doesn't matter — a 0.5 threshold is robust to sRGB/filter).
 
+### Rivers on the 16 km map: TRACE the painted ones, don't re-route (`tools/build_rivers.py`)
+- The old 6 km world had no painted rivers, so `build_water_bodies.py` *invented* them
+  (Priority-Flood + D8 on the GLB heightfield). The 16 km Azgaar map **already draws the
+  rivers** as thin INLAND BLUE lines — the same blue the control-map baker turns into
+  pebble shores — so `tools/build_rivers.py` just **traces what the artist drew** instead
+  of routing water. It rebuilds the river-core mask exactly like `bake_biome_control_map`
+  (inland biome-blue, top=NORTH, so it lines up with the pebbles AND the terrain), then:
+  morphological-**close** → Zhang-Suen **thin** → **trace** centrelines → width from the
+  painted line's thickness → height per vertex → `terrain/water_bodies.json`
+  (`{sea_level, rivers:[{id, points:[[x,y,z,width]…]}]}`), which `terrain/WaterPlanner.gd`
+  renders as one ribbon `ArrayMesh` per river (ocean = a player-following plane at
+  `sea_level`; both use `shaders/water_body.gdshader`, `flow_speed>0` ⇒ river).
+- **Raster-skeleton tracing trap:** degree-based junction splitting EXPLODES an 8-connected
+  skeleton into thousands of 2-px fragments (a diagonal shortcut at every bend looks like a
+  3-way node). Trace by a **greedy directional march** (step to the neighbour that best
+  continues the heading, consume as you go) — it glides through false junctions and only
+  forks at real tributaries. Then DP-simplify.
+- **River heights need the heightfield, which only the GLBs hold.** `build_rivers.py
+  --chunks <dir>` max-pools the surface (drops skirts) for exact heights; with no GLBs in
+  the container it falls back to the **per-chunk manifest** (coarse ~254 m). Two fixes that
+  mattered: (a) **floor `hmin` at sea level before biasing** — a coastal chunk's `hmin` is
+  the sea FLOOR (~−24 m) and anchoring a river there sinks it underwater; (b) force the
+  profile downhill with **isotonic regression (PAVA)**, NOT a running-min (running-min
+  drags the whole river down to one low sample, flattening it to sea level). Re-run with
+  `--chunks` on the machine that has the GLBs for flush ribbons.
+- This is another derived asset: **re-run `build_rivers.py` after the biome map / terrain is
+  re-exported** (and `bake_chunk_normals.py`, and `bake_biome_control_map.py`). `WaterMap.gd`
+  stays the sea-only stub; river *avoidance* for scatterers is already handled by the pebble
+  layer in the control map, so no WaterMap change is needed.
+
 ### The session's branch may NOT hold the real project — find it first
 - The harness branch you're told to develop on can be cut from a **stale base** (here
   the assigned branch was the old cube+plane demo; all the terrain/water/control-map
