@@ -1,0 +1,13 @@
+Id,Biome,Color,Habitability,Cells,Area mi2,Population
+9,Taiga,#4b6b32,12%,2038,162326,17516454
+6,Temperate deciduous forest,#29bc56,100%,1679,142519,29573764
+4,Grassland,#c8d68f,30%,1178,102640,7121308
+11,Glacier,#d5e7eb,0%,833,74440,0
+12,Wetland,#0b9131,12%,803,49094,6713758
+8,Temperate rainforest,#409c43,90%,787,61833,10954070
+5,Tropical seasonal forest,#b6d95d,50%,651,48800,5730225
+3,Savanna,#d2d082,22%,650,49830,3687921
+7,Tropical rainforest,#7dcb35,80%,443,27239,4604613
+10,Tundra,#96784b,4%,268,23910,571758
+1,Hot desert,#fbe79f,4%,173,15539,630518
+2,Cold desert,#b5b887,10%,71,6315,277176
