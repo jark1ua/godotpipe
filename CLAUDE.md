@@ -456,10 +456,24 @@ available mid-session if `.mcp.json` changed during it.
   shoreline ring; those ocean/river **blues** are nearest to the most *desaturated* land
   layer (cold-desert/scree) and will over-paint a tiny biome ~15× if you trust nearest-
   colour alone. Union the two signals → water → a shore layer; rivers come from the mask.
-- **Orientation: Azgaar PNG is north-up; the control map is top=south** (`uv.y=0`=south).
-  Flip the biome map vertically; the Gaea mask/heightmap are already top=south. **Verify
-  by a number, in the consumer's frame:** print the % agreement between mask-water and
-  biome-ocean-colour (≥~75% = aligned; low = the mask is flipped). Don't eyeball it.
+- **Orientation: the 16 km chunk UVs are top=NORTH (image row 0 = north edge) — CONFIRMED
+  IN-ENGINE, and the OPPOSITE of what the manifest `uv` comment and the grass scatterer
+  say.** So image row 0 must hold NORTH data: the north-up Azgaar PNG needs **NO** vertical
+  flip (`FLIP_V=False`), and the Gaea mask is north-up too (`MASK_FLIP_V=False`).
+  `bake_biome_control_map.py` defaults to this. (Painful history: one bake applied the mask
+  upside-down vs the biomes; the next "fixed" it by flipping BOTH to top=south, which
+  rendered the whole world mirrored N↔S. The manifest comment `v=north(S->N)` literally
+  means v=0 at south = top=south, which is WRONG for this export.)
+- **Two checks the agreement number can't give you — orientation is the trap that keeps
+  biting.** (a) Relative: mask-water vs biome-ocean-blue must agree (~93%). (b) ABSOLUTE
+  (which way is up): the agreement % is *symmetric* — it's identical whether the whole map
+  is top=north or top=south — so it CANNOT tell you the absolute flip. Resolve the absolute
+  flip with a **camera-independent physical test against the manifest heightfield**:
+  glaciers/snow must sit on the HIGHEST chunks and water on the LOWEST. Sampling the EXR
+  under the correct world↔texel mapping gives snow mean-height ≫ water mean-height with a
+  big separation (here snow ≈621 m, water ≈5 m under top=north, clearly beating top=south).
+  No GLBs in the repo? You can't read TEXCOORD_0 directly — fall back to this height test
+  plus the user's eyes (compare the render to a vertically-mirrored preview).
 - **Alignment: the Azgaar PNG was *stretched to square* for Gaea**, so it (and the mask)
   map 1:1 in UV to the square terrain — **resize to RES², don't crop.** The biome regions
   read coherent at flat interiors but speckle at anti-aliased borders; a majority/biomify

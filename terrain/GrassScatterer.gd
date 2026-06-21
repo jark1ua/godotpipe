@@ -53,7 +53,7 @@ extends Node3D
 ## 32-layer manifest — read to learn which layer indices belong to a grass group.
 @export_file("*.json") var layer_manifest_path: String = "res://terrain/control_map_layers.json"
 ## 16-bit single-channel control map: base(5) | overlay(5) | blend(5) per texel.
-@export_file var control_map_path: String = "res://terrain/terrain_control_map.exr"
+@export_file var control_map_path: String = "res://terrain/terrain_control_map_16k.exr"
 ## Layer groups treated as "grass". The manifest tags 05-09 as group "grass"; add
 ## "forest" here too if you want grass under the forest-floor layers (16-19).
 @export var grass_groups: PackedStringArray = PackedStringArray(["grass"])
@@ -391,13 +391,15 @@ func _load_control_map() -> void:
 	_cm_h = _control_img.get_height()
 
 # Grass weight at a world XZ (0..1): how much of this texel is a grass layer.
-# Mirrors the terrain shader's control-map UV: u across +X (east), v top=south(+Z).
+# Mirrors the terrain shader's control-map UV: u across +X (east), v top=NORTH(-Z).
+# (Chunk UVs are top=north -- confirmed in-engine; the old `half - wz` was top=south
+# and sampled the map flipped N<->S, so grass landed in the wrong biomes.)
 func _grass_weight(wx: float, wz: float) -> float:
 	if _control_img == null or _cm_w == 0:
 		return 1.0
 	var half := _world_size * 0.5
 	var u := clampf((wx + half) / _world_size, 0.0, 1.0)
-	var v := clampf((half - wz) / _world_size, 0.0, 1.0)
+	var v := clampf((wz + half) / _world_size, 0.0, 1.0)
 	var px := clampi(int(u * float(_cm_w - 1)), 0, _cm_w - 1)
 	var py := clampi(int(v * float(_cm_h - 1)), 0, _cm_h - 1)
 	var packed := int(round(_control_img.get_pixel(px, py).r * 65535.0))

@@ -29,7 +29,7 @@ extends Node3D
 @export var player_path: NodePath
 @export_file("*.json") var manifest_path: String = "res://terrain/terrain_manifest.json"
 @export_file("*.json") var layer_manifest_path: String = "res://terrain/control_map_layers.json"
-@export_file var control_map_path: String = "res://terrain/terrain_control_map.exr"
+@export_file var control_map_path: String = "res://terrain/terrain_control_map_16k.exr"
 ## The object kinds to scatter. Each element is a ScatterKind resource (scene + biome
 ## groups + density + placement). Objects.tscn ships a starter set of placeholders.
 ## (Untyped Array so the hand-authored .tscn list loads cleanly; elements are ScatterKind.)
@@ -345,13 +345,15 @@ func _load_control_map() -> void:
 	_cm_h = _control_img.get_height()
 
 # Group weight at a world XZ (0..1): how much of this texel is one of `layers`. Mirrors the
-# terrain shader's control-map UV: u across +X (east), v top = south(+Z).
+# terrain shader's control-map UV: u across +X (east), v top = NORTH(-Z).
+# (Chunk UVs are top=north -- confirmed in-engine; the old `half - wz` was top=south and
+# sampled the map flipped N<->S, so objects landed in the wrong biomes.)
 func _group_weight(wx: float, wz: float, layers: Dictionary) -> float:
 	if _control_img == null or _cm_w == 0:
 		return 1.0
 	var half := _world_size * 0.5
 	var u := clampf((wx + half) / _world_size, 0.0, 1.0)
-	var v := clampf((half - wz) / _world_size, 0.0, 1.0)
+	var v := clampf((wz + half) / _world_size, 0.0, 1.0)
 	var px := clampi(int(u * float(_cm_w - 1)), 0, _cm_w - 1)
 	var py := clampi(int(v * float(_cm_h - 1)), 0, _cm_h - 1)
 	var packed := int(round(_control_img.get_pixel(px, py).r * 65535.0))

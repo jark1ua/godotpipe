@@ -12,14 +12,16 @@ ground texture layer, water gets a (submerged) shore layer, and biome boundaries
 
 What's faithful to the inputs (and what bit us before)
 ------------------------------------------------------
-* ORIENTATION is verified against the ACTUAL terrain, not a comment. The manifest says
-  `uv: u=east, v=north(S->N)`, so the control map's TOP row (v=0) is SOUTH. The biome
-  PNG (Azgaar, north-up) -> FLIP_V=True puts south on top. The Gaea mask is ALSO north-up
-  here, so MASK_FLIP_V=True (this was the bug: the mask used to be applied upside-down,
-  dropping the ocean on the wrong half of the map). Empirically, in the terrain's own
-  frame (per-chunk hmin/hmax from terrain_manifest.json), biome-blue and mask-water both
-  correlate with low ground at ~93-96% with these flips (vs ~78% when the mask is flipped
-  the wrong way). main() re-checks this every run and warns if it regresses.
+* ORIENTATION is verified against the ACTUAL render, not a comment. Despite the manifest
+  `uv` note and the grass scatterer both claiming v top=south, the chunk UVs are top=NORTH
+  (confirmed in-engine: the rendered landmass matched a vertically-mirrored preview). So
+  image row 0 must hold NORTH data: Azgaar is north-up -> FLIP_V=False, and the Gaea mask
+  is north-up too -> MASK_FLIP_V=False. (Two earlier bakes got this wrong: one applied the
+  mask upside-down vs the biomes; the next flipped BOTH to top=south, which renders the
+  whole map mirrored N<->S.) In the terrain's own frame (per-chunk hmin/hmax from
+  terrain_manifest.json) water correlates with low ground at ~93%; biome-blue and
+  mask-water agree at ~93%. check_orientation() re-checks this every run in the top=north
+  frame.
 * WATER comes from the MASK only (it matches the Gaea heightfield the chunks were built
   from). We do NOT widen water using the biome map's blue gradient — that anti-aliased
   ocean fringe used to over-paint ~12% of the LAND with beach sand. The only blue we read
@@ -108,11 +110,16 @@ LAYER_PREVIEW_RGB = {
 RES = 2048           # control-map resolution (square); must match TEMPLATE_EXR.
 WORLD_SIZE_M = 16000.0
 
-# Orientation (verified against the terrain, see module docstring). Do not flip blindly:
-# main() re-correlates with the manifest heightfield and warns if these are wrong.
-FLIP_V = True        # biome PNG: Azgaar top=north -> control top=south
-FLIP_H = False
-MASK_FLIP_V = True   # Gaea mask is north-up here too -> flip to control top=south
+# Orientation. CONFIRMED IN-ENGINE (the user compared the render to mirrored previews):
+# the chunk UVs are top=NORTH (image row 0 renders at the NORTH edge), NOT top=south as
+# the manifest `uv` comment and the grass scatterer claim. Azgaar is north-up, so NO
+# vertical flip puts north at row 0; the Gaea mask is north-up too. (An earlier bake used
+# FLIP_V/MASK_FLIP_V=True and rendered the whole map mirrored N<->S.) check_orientation()
+# correlates against the heightfield in this top=north frame. Override per-run if a future
+# re-export changes the convention: --flip-v / --mask-flip-v (and the -h variants).
+FLIP_V = False       # biome PNG (Azgaar north-up) -> row 0 = north
+FLIP_H = False       # west on the left (u=0 = west)
+MASK_FLIP_V = False  # Gaea mask north-up -> row 0 = north (matches biome)
 MASK_FLIP_H = False
 MASK_WATER_BELOW = 0.5   # mask value (0..1) below this = water (black=water, white=land)
 
@@ -505,8 +512,12 @@ def write_control_exr(packed, res):
 # --- Orientation sanity (against the real terrain heightfield) --------------
 
 def check_orientation(water, res):
-    """Correlate mask-water with LOW terrain in the control map's own frame (manifest
-    chunks; row i=0 = south = top, col j=0 = west = left). Returns % agreement or None."""
+    """Correlate mask-water with LOW terrain in the control map's TRUE render frame.
+
+    Chunk UVs are top=NORTH (confirmed in-engine), so image row 0 renders at the NORTH
+    edge: chunk i (i=0 = south, z=+half) maps to row (n-1-i)/(n-1)*(res-1); col j (j=0 =
+    west) maps to row-major col j/(n-1)*(res-1). High % => the painted water sits on the
+    low ground as the engine will sample it. Returns % agreement or None."""
     if not os.path.exists(MANIFEST_JSON):
         return None
     d = json.load(open(MANIFEST_JSON))
@@ -521,7 +532,7 @@ def check_orientation(water, res):
     thr = flat[len(flat) // 2]
     ok = tot = 0
     for i in range(n):
-        sy = min(res - 1, round(i * (res - 1) / (n - 1)))
+        sy = min(res - 1, round((n - 1 - i) * (res - 1) / (n - 1)))   # row 0 = north
         for j in range(n):
             if mid[i][j] is None:
                 continue
@@ -535,6 +546,7 @@ def check_orientation(water, res):
 # --- Main -------------------------------------------------------------------
 
 def main():
+    global FLIP_V, FLIP_H, MASK_FLIP_V, MASK_FLIP_H
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--feather-m", type=float, default=FEATHER_M,
@@ -545,7 +557,19 @@ def main():
                     help="pebble band width (m) grown around river courses")
     ap.add_argument("--no-pebbles", action="store_true", help="skip river pebbles")
     ap.add_argument("--no-feather", action="store_true", help="hard biome edges (debug)")
+    # Orientation overrides (defaults are the confirmed top=north convention). Use these
+    # if a future terrain re-export flips a UV axis.
+    ap.add_argument("--flip-v", dest="flip_v", action="store_true", default=FLIP_V)
+    ap.add_argument("--no-flip-v", dest="flip_v", action="store_false")
+    ap.add_argument("--flip-h", dest="flip_h", action="store_true", default=FLIP_H)
+    ap.add_argument("--no-flip-h", dest="flip_h", action="store_false")
+    ap.add_argument("--mask-flip-v", dest="mask_flip_v", action="store_true", default=MASK_FLIP_V)
+    ap.add_argument("--no-mask-flip-v", dest="mask_flip_v", action="store_false")
+    ap.add_argument("--mask-flip-h", dest="mask_flip_h", action="store_true", default=MASK_FLIP_H)
+    ap.add_argument("--no-mask-flip-h", dest="mask_flip_h", action="store_false")
     args = ap.parse_args()
+    FLIP_V, FLIP_H = args.flip_v, args.flip_h
+    MASK_FLIP_V, MASK_FLIP_H = args.mask_flip_v, args.mask_flip_h
 
     m_per_texel = WORLD_SIZE_M / RES
     feather_r = max(1, round(args.feather_m / m_per_texel))
