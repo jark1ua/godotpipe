@@ -418,3 +418,75 @@ available mid-session if `.mcp.json` changed during it.
   `zlib`+CRC writer; decode by undoing the per-row filter. Keep mask textures small
   and binary (precision doesn't matter — a 0.5 threshold is robust to sRGB/filter).
 
+### The session's branch may NOT hold the real project — find it first
+- The harness branch you're told to develop on can be cut from a **stale base** (here
+  the assigned branch was the old cube+plane demo; all the terrain/water/control-map
+  work lived on a *different* branch). **Before concluding files are "missing,"
+  enumerate the other branches** and grep their trees:
+  `git ls-tree -r --name-only origin/<branch> | grep -Ei 'terrain|water|...'`. The real
+  project is usually the most-recent branch, and the user's "Add files via upload"
+  commits (large PNG/JSON/GLB) mark where they uploaded the current map.
+- If the user says "remove our X" / "reclassify Y" and X/Y aren't on your branch, that's
+  a branch-state mismatch, not a fresh build — confirm **which branch to work on** (and
+  get explicit OK to push there if it's not the assigned one) rather than recreating
+  files in isolation. The user's local working copy (with the big uncommitted assets) is
+  the source of truth they pull your changes into.
+
+### Control map MUST be EXR — a 16-bit PNG renders as all-rock
+- The splat shader packs the layer id in the **LOW** 5 bits (`base = V & 31`). Godot
+  **truncates a 16-bit PNG to 8-bit keeping the HIGH byte**, zeroing every id → `base
+  0` (`rock_cold_granite`) **everywhere**. So **uniform rock terrain == the control map
+  was read at 8 bits.** Ship the control map as `.exr` (float R), never PNG. Generate a
+  fresh EXR by loading the existing control-map EXR as a *structural template* and
+  `write_all_packed()` over its R channel (`tools/exr_control_map.py`); the baker should
+  re-read and assert every `base` lands in 0..31 before trusting it. The "terrain looks
+  grey/wrong material" twin trap: a `StandardMaterial3D` override in the `Terrain` node's
+  **Terrain Material** slot *bypasses* the splat shader entirely — clear it to let the
+  streamer build the control-map material.
+
+### Painted biomes → control map (Azgaar → Gaea → Blender → Godot)
+- The Gaea albedo (`terrain_color.png`) is **continuous colour, not labels.** Discrete
+  biome ids are lost in the Gaea/Blender steps. Recover them by exporting from Azgaar a
+  **biome PNG + a colour→biome CSV** (and a binary **land/water mask**, e.g. Gaea's
+  `Adjust_Out.png`, black=water). Those are the real labels.
+- **Classify by nearest palette colour, memoised by exact RGB** — Azgaar fills regions
+  flat, so ~70%+ of land texels hit a palette colour exactly; the memo makes 4M texels
+  cheap. Map biome id → texture layer in one editable table at the top of the baker.
+- **Water = mask OR "colour far from EVERY land biome."** The coarse mask misses the
+  shoreline ring; those ocean/river **blues** are nearest to the most *desaturated* land
+  layer (cold-desert/scree) and will over-paint a tiny biome ~15× if you trust nearest-
+  colour alone. Union the two signals → water → a shore layer; rivers come from the mask.
+- **Orientation: Azgaar PNG is north-up; the control map is top=south** (`uv.y=0`=south).
+  Flip the biome map vertically; the Gaea mask/heightmap are already top=south. **Verify
+  by a number, in the consumer's frame:** print the % agreement between mask-water and
+  biome-ocean-colour (≥~75% = aligned; low = the mask is flipped). Don't eyeball it.
+- **Alignment: the Azgaar PNG was *stretched to square* for Gaea**, so it (and the mask)
+  map 1:1 in UV to the square terrain — **resize to RES², don't crop.** The biome regions
+  read coherent at flat interiors but speckle at anti-aliased borders; a majority/biomify
+  consolidation pass is the cleanup (separate from getting classification correct).
+- Decoding a huge source PNG with no numpy/PIL: if every scanline uses the **'Up' filter**
+  (common for tool exports), columns are independent — reconstruct only the sampled
+  columns as `itertools.accumulate` (C-fast cumulative sum) instead of unfiltering the
+  whole image. Keep a general per-row unfilter as the fallback for mixed filters.
+
+### Map-resize & subsystem-removal gotchas
+- **Hunt hardcoded world dimensions when the world is re-exported.** `world_size_m` was
+  baked as `6000.0` in the streamer's shader-param call; the 16 km map needs it from the
+  manifest (`data["world_size_m"]`). Manifests adapt index math automatically (`step_m`,
+  `center_index`) but *not* a value you hardcoded elsewhere.
+- A **stray node transform** can come in via an editor "Add files via upload": the
+  `Terrain` root had a ~8° X-tilt baked into its `.tscn` `Transform3D` basis, so the flat
+  sea plane bisected the map ("terrain looks rotated"). The Blender→Godot axis conversion
+  is **baked into the chunk GLBs** and the streamer adds no rotation, so the root belongs
+  at **identity** — reset the basis, don't compensate.
+- **Removing a generated subsystem that others depend on: keep the public API as a
+  minimal stub, don't gut the callers.** Deleting the procedural lake/river system,
+  `WaterMap` was reduced to a **sea-level-only** model (water = below `sea_level_y`) so the
+  scatterers' `avoid_water` / `water_edge` gates keep working unchanged.
+
+### Generated JSON needs a trailing newline
+- Godot's `JSON.parse_string` reports **"Unexpected character" at the last line** when a
+  file ends with `}` and **no trailing newline** — even though the JSON is valid and
+  Python parses it fine. Always end emitted/edited JSON (manifests, layer tables) with a
+  newline; CRLF is tolerated (it would fail at line 1, not the last, if it weren't).
+
