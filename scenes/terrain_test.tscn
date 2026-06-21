@@ -4,10 +4,13 @@
 ; chunked terrain; moving it drives TerrainStreamer.gd to load/free chunks by
 ; distance. Sky + sun + light fog so the far (unloaded) edge fades out.
 ;
-; Spawn sits just above the centre chunk (15,15), which is a ~1.4 km mountain
-; peak at the world origin — so the player lands on the surface, not under it.
+; Spawn sits on a low COASTAL spit (world ~(2032, 5841), chunk (8,39), ground ~13 m)
+; with open ocean immediately to the west/north and a river ~84 m away — so the sea
+; (sea level y=0) and a river are both in view on landing. (The world origin is the
+; map's highest peak at ~810 m; spawning there put all water hundreds of metres below.)
 ; The streamer loads the chunk under the player synchronously on spawn, so the
-; ground/collision is there on the first frame.
+; ground/collision is there on the first frame. Fly (V) to the central mountain for the
+; peak view.
 ;
 ; Run directly from the editor (F6). Controls: WASD + mouse move/look, Shift
 ; sprint, Space jump, V to toggle no-clip fly (fast traversal), Esc to release
@@ -53,7 +56,7 @@ light_energy = 1.1
 shadow_enabled = true
 
 [node name="Player" type="CharacterBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1401, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2032, 20.6, 5841)
 script = ExtResource("1_player")
 
 [node name="Collision" type="CollisionShape3D" parent="Player"]
