@@ -4,7 +4,6 @@
 [ext_resource type="Material" uid="uid://dkaqhnc1n2hhk" path="res://terrain_colour.tres" id="2_yd2fl"]
 
 [node name="Terrain" type="Node3D" unique_id=1538848009]
-transform = Transform3D(1, 0, 0, 0, 0.99001133, 0.14098762, 0, -0.14098762, 0.99001133, 0, 0, 0)
 script = ExtResource("1_strm")
 manifest_path = "res://terrain/terrain_manifest.json"
 chunks_dir = "res://terrain/chunks"
