@@ -34,7 +34,7 @@ background_mode = 2
 sky = SubResource("Sky")
 ambient_light_source = 3
 tonemap_mode = 2
-fog_enabled = true
+fog_enabled = false
 fog_light_color = Color(0.64, 0.66, 0.7, 1)
 fog_density = 0.0009
 
@@ -63,7 +63,7 @@ shape = SubResource("Capsule")
 [node name="Camera3D" type="Camera3D" parent="Player"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 current = true
-far = 4000.0
+far = 16000.0
 
 [node name="Terrain" parent="." instance=ExtResource("2_terrain")]
 player_path = NodePath("../Player")

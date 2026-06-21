@@ -1,8 +1,15 @@
-[gd_scene load_steps=2 format=3 uid="uid://dterrainstream12"]
+[gd_scene format=3 uid="uid://cy8uqq58p33hr"]
 
-[ext_resource type="Script" path="res://terrain/TerrainStreamer.gd" id="1_strm"]
+[ext_resource type="Script" uid="uid://ch4xfui78223c" path="res://terrain/TerrainStreamer.gd" id="1_strm"]
+[ext_resource type="Material" uid="uid://dkaqhnc1n2hhk" path="res://terrain_colour.tres" id="2_yd2fl"]
 
-[node name="Terrain" type="Node3D"]
+[node name="Terrain" type="Node3D" unique_id=1538848009]
+transform = Transform3D(1, 0, 0, 0, 0.99001133, 0.14098762, 0, -0.14098762, 0.99001133, 0, 0, 0)
 script = ExtResource("1_strm")
 manifest_path = "res://terrain/terrain_manifest.json"
 chunks_dir = "res://terrain/chunks"
+load_radius = 32
+keep_radius = 32
+terrain_material = ExtResource("2_yd2fl")
+preview_focus_chunk = Vector2i(64, 64)
+preview_radius = 64
