@@ -22,10 +22,10 @@ extends Node3D
 ##   Blender +Z (up)    -> Godot +Y   (1 unit = 1 metre, no scaling)
 ##   chunk j -> +X, chunk i -> -Z ;  index = round(p / step_m) + center_index
 
-@export_file("*.json") var manifest_path: String = "res://terrain/terrain_manifest.json"
+@export_file("*.json") var manifest_path: String = "res://terrain_manifest.json"
 @export var player_path: NodePath
 ## Folder (in res://) that holds the .glb files.
-@export_dir var chunks_dir: String = "res://terrain/chunks"
+@export_dir var chunks_dir: String = "res://terrain_chunks_16k"
 ## Chunks loaded around the player (Chebyshev / square radius). The loaded area is
 ## (2*load_radius+1)^2 chunks, so 4 -> 9x9 = 81. With fog hiding the far edge there
 ## is little point loading more; raise it only if you can see the unloaded boundary.
@@ -63,6 +63,7 @@ extends Node3D
 ## Print per-update / per-build streaming stats (player chunk, in-flight, and the
 ## time split between the normal-fix and the collision bake). Use to find hitches.
 @export var debug_streaming: bool = false
+@export var debug_skip_terrain_material: bool = false
 
 @export_group("Terrain Shader (for bisecting GPU cost)")
 ## Enable parallax occlusion mapping on the runtime-built terrain material. Turn off
@@ -279,7 +280,7 @@ func _collect_meshes(node: Node, out: Array) -> void:
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			var mi := child as MeshInstance3D
-			if mat != null:
+			if mat != null and not debug_skip_terrain_material:
 				mi.material_override = mat
 			out.append(mi)
 		_collect_meshes(child, out)
