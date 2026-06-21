@@ -440,6 +440,12 @@ func _load_editor_preview() -> void:
 	if not Engine.is_editor_hint():
 		return
 	_clear_editor_preview()
+	# Rebuild from disk on every reload: the terrain material (control map + layer
+	# arrays) and the manifest are cached for the node's lifetime, so without this a
+	# re-bake of the control-map EXR only shows up after closing and reopening the
+	# scene. Dropping them here makes "Clear + Load Editor Preview" a true refresh.
+	_material = null
+	_meta.clear()
 	_load_manifest()
 	var fi := preview_focus_chunk.x
 	var fj := preview_focus_chunk.y
@@ -652,5 +658,8 @@ func _report_control_map_precision(img: Image) -> void:
 				any_blend += 1
 			bases[v & 31] = true
 	var verdict := "16-bit OK" if low_byte_nonzero > 0 else "LOOKS 8-BIT TRUNCATED (re-export as EXR)"
-	print("TerrainStreamer: control map %dx%d — %s. %d/%d texels with nonzero low byte; %d distinct base layers; overlay used in %d, blend in %d." % [
-		w, h, verdict, low_byte_nonzero, samples, bases.size(), any_overlay, any_blend])
+	# overlay/blend are zero everywhere only on the old base-only bake; the feathered
+	# biome map sets them on ~1/4 of texels. A quick way to tell which EXR is loaded.
+	var blend_state := "FEATHERED (current bake)" if (any_overlay > 0 or any_blend > 0) else "BASE-ONLY (old map — pull/re-bake the control-map EXR)"
+	print("TerrainStreamer: control map %dx%d — %s; %s. %d/%d texels with nonzero low byte; %d distinct base layers; overlay used in %d, blend in %d." % [
+		w, h, verdict, blend_state, low_byte_nonzero, samples, bases.size(), any_overlay, any_blend])
