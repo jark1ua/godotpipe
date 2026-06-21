@@ -27,6 +27,7 @@ __pycache__/
 # Regenerable debug previews from tools/bake_biome_control_map.py
 /terrain/control_map_16k_layer_preview.png
 /terrain/control_map_16k_biome_preview.png
+/terrain/control_map_16k_natural_preview.png
 
 terrain/chunks/*.glb
 terrain/chunks/*.glb.import

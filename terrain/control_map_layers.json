@@ -4,7 +4,7 @@
   "control_map_resolution": 2048,
   "control_map_bit_depth": 16,
   "world_size_m": 16000,
-  "control_map_source": "Baked from the painted Azgaar biome map by tools/bake_biome_control_map.py (biome colour -> texture layer). Base layer only so far; slope/altitude overlays (rock on cliffs, snow up high) are a follow-up that needs terrain_heightmap_16k.png.",
+  "control_map_source": "Baked from the painted Azgaar biome map by tools/bake_biome_control_map.py (biome colour -> texture layer). Water is the Gaea Adjust_Out mask (verified against the terrain heightfield: FLIP_V and MASK_FLIP_V both True -> top=south, ~93% agreement with low ground). Biome boundaries are feathered into the shader's height-blend (base|overlay|blend), not hard edges. Inland river-blue gets pebble_field courses + banks; the ocean does not. Re-run after any biome/mask/terrain re-export.",
   "uv_mapping": "uv=((world_x+8000)/16000,(world_y+8000)/16000); image TOP row = south (uv.y=0), col0 = west (uv.x=0). Matches terrain chunk world UVs.",
   "encoding": {
     "format": "16-bit single-channel grayscale PNG (R channel)",
