@@ -23,3 +23,7 @@ obj/
 *~
 __pycache__/
 *.pyc
+
+# Regenerable debug previews from tools/bake_biome_control_map.py
+/terrain/control_map_16k_layer_preview.png
+/terrain/control_map_16k_biome_preview.png

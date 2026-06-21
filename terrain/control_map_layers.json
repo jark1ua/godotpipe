@@ -1,10 +1,11 @@
 {
   "version": "1.0",
-  "control_map": "terrain_control_map.png",
+  "control_map": "terrain_control_map_16k.png",
   "control_map_resolution": 2048,
   "control_map_bit_depth": 16,
-  "world_size_m": 6000,
-  "uv_mapping": "uv=((world_x+3000)/6000,(world_y+3000)/6000); image TOP row = south (uv.y=0), col0 = west (uv.x=0). Matches existing terrain chunk world UVs & terrain_splatmap.png.",
+  "world_size_m": 16000,
+  "control_map_source": "Baked from the painted Azgaar biome map by tools/bake_biome_control_map.py (biome colour -> texture layer). Base layer only so far; slope/altitude overlays (rock on cliffs, snow up high) are a follow-up that needs terrain_heightmap_16k.png.",
+  "uv_mapping": "uv=((world_x+8000)/16000,(world_y+8000)/16000); image TOP row = south (uv.y=0), col0 = west (uv.x=0). Matches terrain chunk world UVs.",
   "encoding": {
     "format": "16-bit single-channel grayscale PNG (R channel)",
     "decode_int": "V = round(texture_R * 65535.0)",

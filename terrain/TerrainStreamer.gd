@@ -76,7 +76,8 @@ extends Node3D
 ## 32-layer manifest (names, texture_set, tile_meters, triplanar) baked in Blender.
 @export_file("*.json") var layer_manifest_path: String = "res://terrain/control_map_layers.json"
 ## 16-bit single-channel control map: base(5) | overlay(5) | blend(5) per texel.
-@export_file var control_map_path: String = "res://terrain/terrain_control_map.exr"
+## Default is the biome-baked map for the 16 km world (tools/bake_biome_control_map.py).
+@export_file var control_map_path: String = "res://terrain/terrain_control_map_16k.png"
 ## Folder of base PBR sets: <sets_dir>/<set>/{albedo,normal,height,ao,rough}.png.
 ## Used as the fallback for any layer that has no dedicated textures yet.
 @export_dir var sets_dir: String = "res://terrain/arrays/sets"
@@ -100,6 +101,7 @@ extends Node3D
 
 var _step: float = 193.5483
 var _center: int = 15
+var _world_size_m: float = 16000.0    # full world span (m); read from the manifest
 var _meta: Dictionary = {}     # "i_j" -> { pos: Vector3, path: String }
 var _loaded: Dictionary = {}   # "i_j" -> Node3D
 var _pending: Dictionary = {}  # "i_j" -> resource path
@@ -142,6 +144,7 @@ func _load_manifest() -> void:
 	var data: Dictionary = JSON.parse_string(f.get_as_text())
 	_step = float(data["step_m"])
 	_center = int(data["center_index"])
+	_world_size_m = float(data.get("world_size_m", _world_size_m))
 	for c in data["chunks"]:
 		var key := "%d_%d" % [int(c["i"]), int(c["j"])]
 		var p: Array = c["pos"]
@@ -523,7 +526,7 @@ func _build_terrain_material() -> ShaderMaterial:
 		mat.set_shader_parameter("control_map", cm)
 	mat.set_shader_parameter("layer_tile_m", tiles)
 	mat.set_shader_parameter("layer_triplanar", tris)
-	mat.set_shader_parameter("world_size_m", 6000.0)
+	mat.set_shader_parameter("world_size_m", _world_size_m)
 	mat.set_shader_parameter("default_tile_m", default_tile_m)
 	# Bisection toggles for GPU cost (see exports): drive the shader's own switches.
 	mat.set_shader_parameter("enable_parallax", enable_parallax)
